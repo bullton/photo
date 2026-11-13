@@ -81,7 +81,6 @@ def analyze(items: list[dict], want_tags: bool = True, force: bool = False) -> d
             luma = metrics.to_luma(loaded["image"])
             box = tuple(meta["focus_box"]) if meta.get("focus_box") else None
             measured = metrics.analyze_luma(luma, box)
-            scored = scoring.score_photo(measured, iso=_iso(meta))
         except (preview.PreviewError, ValueError, OSError) as error:
             results.append({"id": entry_id, "ok": False, "error": str(error)})
             continue
@@ -90,6 +89,9 @@ def analyze(items: list[dict], want_tags: bool = True, force: bool = False) -> d
         if tagger is not None:
             with _gpu_lock:
                 tags = tagger.tag(loaded["image"])
+        # 先出标签再评分：星空/夜景需要场景类目来避免被当成废片。
+        scenes = {tag["key"] for tag in tags} if tags else None
+        scored = scoring.score_photo(measured, iso=_iso(meta), scenes=scenes)
 
         payload = {
             "metrics": _compact(measured),

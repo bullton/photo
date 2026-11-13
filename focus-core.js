@@ -197,6 +197,23 @@
   }
 
   /** Map raw scores to 0–100 within the current batch (log scale). */
+  /**
+   * Absolute 0-100 score for a raw subject-sharpness value.
+   *
+   * Batch-relative normalization made a photo's score (and therefore its
+   * verdict and stars) depend on which other photos were imported with it:
+   * the same frame could read 4 stars today and 3 next week. This fixed log
+   * curve anchors SOFT_FLOOR (110, empirically the soft/practical boundary
+   * at 1600px) at 50 and a solidly sharp frame (~760) at 100.
+   */
+  function absoluteScore(rawScore) {
+    const value = Math.max(0, Number.isFinite(rawScore) ? rawScore : 0);
+    const low = Math.log1p(15);
+    const high = Math.log1p(760);
+    if (high - low < 1e-9) return 0;
+    return clamp((100 * (Math.log1p(value) - low)) / (high - low), 0, 100);
+  }
+
   function normalizeScores(rawScores) {
     const values = rawScores.map(function (value) {
       return Math.max(0, Number.isFinite(value) ? value : 0);
@@ -614,11 +631,13 @@
   }
 
   return {
-    version: '1.0.1',
+    version: '1.1.0',
     // Subject sharpness (block-variance median at 1600px) below this reads as
-    // soft in practice; used only to keep the auto line from collapsing to 0
-    // on batches with a continuous score distribution.
+    // soft in practice; also the 50-point anchor of absoluteScore.
     SOFT_FLOOR: 110,
+    // Default sharp/border line on the absolute 0-100 scale.
+    SCORE_LINE: 50,
+    absoluteScore: absoluteScore,
     lumaFromRGBA: lumaFromRGBA,
     analyzeLuma: analyzeLuma,
     normalizeScores: normalizeScores,

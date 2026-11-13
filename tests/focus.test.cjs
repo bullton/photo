@@ -315,6 +315,19 @@ function main() {
   assert.strictEqual(grid.length, 12, 'color grid is size*size*3');
   assert.ok(Core.colorDistance(grid, grid) === 0, 'identical grids have zero distance');
 
+  // Absolute score: fixed anchors, independent of the rest of the batch.
+  assert.strictEqual(Math.round(Core.absoluteScore(Core.SOFT_FLOOR)), 50, 'soft floor maps to 50');
+  assert.strictEqual(Core.absoluteScore(0), 0, 'zero variance maps to 0');
+  assert.strictEqual(Core.absoluteScore(1e9), 100, 'huge variance clamps to 100');
+  assert.ok(Core.absoluteScore(300) > 60, 'sharp frame scores above the line');
+  assert.ok(Core.absoluteScore(40) < 40, 'soft frame scores below the line');
+  assert.ok(
+    Core.absoluteScore(600) > Core.absoluteScore(300) &&
+      Core.absoluteScore(300) > Core.absoluteScore(110),
+    'absolute score is monotonic'
+  );
+  assert.strictEqual(Core.SCORE_LINE, 50, 'default sharp line is 50');
+
   console.log('\nAll focus-core tests passed.');
 }
 

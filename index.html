@@ -1149,7 +1149,7 @@ select option { background: #14171a; color: var(--text); }
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <div class="drop-overlay" id="dropOverlay" hidden><p>松开鼠标，添加照片</p></div>
 
-<script src="focus-core.js?v=1.0.1"></script>
+<script src="focus-core.js?v=1.1.0"></script>
 <script src="ai-core.js?v=0.1.0"></script>
 <script>
 (function () {
@@ -1332,8 +1332,8 @@ select option { background: #14171a; color: var(--text); }
     filter: 'all',
     sort: 'group',
     manualLine: null,
-    line: 62,
-    autoLine: 62,
+    line: 50,
+    autoLine: 50,
     running: false,
     visibleCount: PAGE_SIZE,
     viewerId: null,
@@ -1363,6 +1363,9 @@ select option { background: #14171a; color: var(--text); }
   var DB_NAME = 'photo-cull-cache';
   var DB_VERSION = 2;
   var CACHE_ENGINE = 3;
+  // Bumped when the score scale changes; restored caches older than this get
+  // their norms recomputed from the saved raw value instead of re-analysis.
+  var SCORE_VERSION = 3;
   var STORE_META = 'meta';
   var STORE_PHOTOS = 'photos';
   var STORE_THUMBS = 'thumbs';
@@ -1497,7 +1500,8 @@ select option { background: #14171a; color: var(--text); }
       actual: state.actual,
       zoom: state.zoom,
       rawOnly: state.rawOnly,
-      autoVersion: 2
+      autoVersion: 2,
+      scoreVersion: SCORE_VERSION
     }).catch(function () {});
   }
 
@@ -1604,6 +1608,17 @@ select option { background: #14171a; color: var(--text); }
         var savedZoom = Number(settings.zoom);
         state.zoom = Number.isFinite(savedZoom) ? clamp(Math.round(savedZoom), 25, 200) : 100;
         state.rawOnly = !!settings.rawOnly;
+        if ((Number(settings.scoreVersion) || 0) < SCORE_VERSION) {
+          // 旧缓存里的 norm 与阈值是“批内相对分”，迁移到绝对刻度并重置手动线。
+          state.manualLine = null;
+          state.autoLine = CORE.SCORE_LINE;
+          state.line = state.autoLine;
+          state.photos.forEach(function (photo) {
+            if (photo.status !== 'done') return;
+            var raw = Number.isFinite(photo.focusRaw) ? photo.focusRaw : photo.raw;
+            photo.norm = CORE.absoluteScore(raw);
+          });
+        }
         state.viewerId = null;
         state.restored = true;
         els.sortSelect.value = state.sort;
@@ -2395,29 +2410,15 @@ select option { background: #14171a; color: var(--text); }
     var values = done.map(function (photo) {
       return Number.isFinite(photo.focusRaw) ? photo.focusRaw : photo.raw;
     });
-    var norms = CORE.normalizeScores(values);
-    done.forEach(function (photo, index) { photo.norm = norms[index]; });
+    // 绝对刻度：单张分数不再取决于同批其他照片，导入新目录不会让旧片掉星。
+    done.forEach(function (photo, index) { photo.norm = CORE.absoluteScore(values[index]); });
 
-    // 主体清晰度的绝对下限，映射到这一批的相对刻度。低于它的照片再相对
-    // 靠前也应算软；整批都高于下限时它会落到 0，不影响相对分档。
-    var floorLine = clamp(Math.round(CORE.normalizedPosition(CORE.SOFT_FLOOR, values)), 0, 100);
-    var split = CORE.findGapSplit(values);
-    if (split.index >= 0) {
-      var pairs = done.map(function (photo, index) {
-        return { value: values[index], norm: norms[index] };
-      }).sort(function (a, b) { return a.value - b.value; });
-      var lowNorm = pairs[split.index].norm;
-      var highNorm = pairs[split.index + 1].norm;
-      state.autoLine = Math.max(clamp(Math.round((lowNorm + highNorm) / 2), 0, 100), floorLine);
-    } else {
-      // 分数连续、找不到明显断点时，不能把线压到 0（那会让整批都判合焦）。
-      state.autoLine = floorLine;
-    }
+    state.autoLine = CORE.SCORE_LINE;
     state.line = state.manualLine == null ? state.autoLine : state.manualLine;
 
     var maxValue = 0;
     done.forEach(function (photo, index) { if (values[index] > maxValue) maxValue = values[index]; });
-    state.softBatch = done.length >= 2 && maxValue < 28;
+    state.softBatch = done.length >= 2 && maxValue < CORE.SOFT_FLOOR;
 
     buildGroups();
     applyAutoStars();
@@ -2601,7 +2602,7 @@ select option { background: #14171a; color: var(--text); }
     } else if (done < 3) {
       els.batchNote.hidden = false;
       els.batchNote.classList.remove('is-soft');
-      els.batchNote.textContent = '样本少于 3 张时，相对评分仅供参考。';
+      els.batchNote.textContent = '评分为绝对刻度（与批次无关），样本少时仍建议人工确认。';
     } else {
       els.batchNote.hidden = true;
     }
@@ -3775,12 +3776,41 @@ select option { background: #14171a; color: var(--text); }
     if (!window.AIEnhance) return;
     var index = {};
     state.photos.forEach(function (photo) { index[photo.id] = photo; });
+    // 组内最佳 / 组内重复：重复只按"构图几乎相同"认定，避免把连拍中的
+    // 不同姿态也标成重复。
+    var duplicates = 0;
+    state.groups.forEach(function (ids) {
+      var best = null;
+      ids.forEach(function (id) {
+        var photo = index[id];
+        if (!photo || !photo.ai) return;
+        if (!best || photo.ai.composite > best.ai.composite) best = photo;
+      });
+      if (!best) return;
+      ids.forEach(function (id) {
+        var photo = index[id];
+        if (!photo || !photo.ai) return;
+        if (photo === best) {
+          photo.ai.groupBest = true;
+          photo.ai.groupDup = false;
+          return;
+        }
+        var close = photo.hash && best.hash && photo.color && best.color
+          ? CORE.hashDistance(photo.hash, best.hash) <= 10 &&
+            CORE.colorDistance(photo.color, best.color) <= 24
+          : false;
+        photo.ai.groupBest = false;
+        photo.ai.groupDup = close;
+        if (close) duplicates += 1;
+      });
+    });
     var result = window.AIEnhance.applySuggested(state.photos, state.groups, function (id) {
       return index[id];
     });
     renderAll();
     toast('已按建议更新 ' + result.changed + ' 张' +
-      (result.rejected ? '，其中建议废片 ' + result.rejected + ' 张' : ''));
+      (result.rejected ? '，其中建议废片 ' + result.rejected + ' 张' : '') +
+      (duplicates ? '，标记重复 ' + duplicates + ' 张' : ''));
   }
 
   async function exportAiXmp() {
@@ -3799,14 +3829,18 @@ select option { background: #14171a; color: var(--text); }
     }
     var items = targets.map(function (photo) {
       var rating = photo.rating || 0;
+      var tags = (photo.ai.tags || []).map(function (tag) { return 'AI/' + tag.key; });
+      if (photo.ai.groupBest) tags.push('AI/Keep');
+      if (photo.ai.groupDup) tags.push('AI/Duplicate');
       return {
         id: photo.id,
         path: (photo.file && photo.file.__path) || '',
         dir: desktopDir(),
         name: photo.name,
         rating: rating,
-        tags: (photo.ai.tags || []).map(function (tag) { return 'AI/' + tag.key; }),
-        label: rating === 0 ? 'Red' : (rating >= 4 ? 'Green' : null)
+        tags: tags,
+        label: photo.ai.groupDup ? 'Yellow'
+          : (rating === 0 ? 'Red' : (rating >= 4 ? 'Green' : null))
       };
     });
     els.aiXmpBtn.disabled = true;

@@ -123,7 +123,25 @@ def star_for(composite: float, verdict: str) -> int:
     return 2
 
 
-def score_photo(metrics: dict, weights: dict | None = None, iso: float | None = None) -> dict:
+NIGHT_CLASSES = {"astrophotography", "night_scene"}
+NIGHT_STAR_MIN = 2
+
+
+def looks_like_night(metrics: dict) -> bool:
+    """暗场照片的保底判断：不依赖 CLIP 也能识别大面积暗部 + 极低高光。"""
+    exposure = metrics.get("exposure", {})
+    mean = float(exposure.get("mean", 128.0))
+    highlight = float(exposure.get("highlight_clip", 0.0))
+    shadow = float(exposure.get("shadow_clip", 0.0))
+    return mean <= 45.0 and highlight <= 0.01 and shadow >= 0.20
+
+
+def score_photo(
+    metrics: dict,
+    weights: dict | None = None,
+    iso: float | None = None,
+    scenes: set[str] | tuple[str, ...] | None = None,
+) -> dict:
     """返回分项分、综合分、判定与星级建议。"""
     config = load_config()
     weight_map = normalize_weights(weights or config.get("weights"))
@@ -137,10 +155,19 @@ def score_photo(metrics: dict, weights: dict | None = None, iso: float | None = 
     }
     composite = sum(parts[key] * weight_map[key] for key in weight_map)
     verdict = verdict_of(parts["focus"], float(metrics.get("texture_ratio", 0.0)))
+    star = star_for(composite, verdict)
+    scene_keys = set(scenes or ())
+    night = bool(scene_keys & NIGHT_CLASSES) or looks_like_night(metrics)
+    if night:
+        # 宁可交给人工复核，也不要把用户最在意的星空/夜景建议成废片。
+        if verdict == "blur":
+            verdict = "border"
+        star = max(star, NIGHT_STAR_MIN)
     return {
         "parts": {key: round(value, 2) for key, value in parts.items()},
         "weights": {key: round(value, 4) for key, value in weight_map.items()},
         "composite": round(composite, 2),
         "verdict": verdict,
-        "star": star_for(composite, verdict),
+        "star": star,
+        "night": night,
     }

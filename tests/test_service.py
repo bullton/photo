@@ -111,6 +111,43 @@ class ScoringTest(unittest.TestCase):
         clipped = {"highlight_clip": 0.4, "shadow_clip": 0.0, "mean": 220.0}
         fine = {"highlight_clip": 0.0, "shadow_clip": 0.0, "mean": 128.0}
         self.assertLess(scoring.exposure_score(clipped), scoring.exposure_score(fine))
+
+    def test_night_shots_are_not_rejected(self):
+        night = {
+            "focus_norm": 0.08,
+            "motion_risk": 0.1,
+            "texture_ratio": 0.3,
+            "exposure": {"mean": 18.0, "highlight_clip": 0.0, "shadow_clip": 0.62},
+            "noise": {"sigma": 3.0},
+            "subject": {"share": 0.2},
+        }
+        scored = scoring.score_photo(night)
+        self.assertTrue(scored["night"])
+        self.assertNotEqual(scored["verdict"], "blur")
+        self.assertGreaterEqual(scored["star"], 2)
+
+    def test_astro_tag_protects_even_bright_frames(self):
+        metrics = {
+            "focus_norm": 0.08,
+            "motion_risk": 0.1,
+            "texture_ratio": 0.3,
+            "exposure": {"mean": 120.0, "highlight_clip": 0.0, "shadow_clip": 0.1},
+            "noise": {"sigma": 2.0},
+            "subject": {"share": 0.2},
+        }
+        self.assertGreaterEqual(scoring.score_photo(metrics, scenes={"astrophotography"})["star"], 2)
+        self.assertFalse(scoring.score_photo(metrics, scenes={"portrait"})["night"])
+
+    def test_daylight_frame_is_not_flagged_night(self):
+        metrics = {
+            "focus_norm": 0.9,
+            "motion_risk": 0.0,
+            "texture_ratio": 0.5,
+            "exposure": {"mean": 128.0, "highlight_clip": 0.0, "shadow_clip": 0.1},
+            "noise": {"sigma": 2.0},
+            "subject": {"share": 0.4},
+        }
+        self.assertFalse(scoring.score_photo(metrics)["night"])
         night = {"highlight_clip": 0.0, "shadow_clip": 0.8, "mean": 20.0}
         self.assertLess(scoring.exposure_score(night), 100.0)
 

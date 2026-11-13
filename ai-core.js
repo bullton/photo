@@ -165,6 +165,8 @@
     var bits = [];
     bits.push('运动模糊风险 ' + Math.round((ai.motionRisk || 0) * 100) + '%');
     bits.push('纹理覆盖 ' + Math.round((ai.textureRatio || 0) * 100) + '%');
+    if (ai.groupBest) bits.push('组内最佳');
+    if (ai.groupDup) bits.push('组内重复（已降为 1 星）');
     if (ai.exif && ai.exif.ISO) bits.push('ISO ' + Math.round(ai.exif.ISO));
     if (ai.cached) bits.push('来自本机缓存');
     note.textContent = bits.join(' · ');
@@ -270,6 +272,8 @@
       if (!photo.ai || photo.starTouched) return;
       var star = photo.ai.star || 0;
       if (star > 0 && bestOfGroup[photo.id]) star = Math.min(5, star + 1);
+      // 组内重复：即使单张本身够清晰，也只保留 1 星，交由用户在 DxO 里复核。
+      if (photo.ai.groupDup) star = Math.min(star, 1);
       if (star === 0) rejected += 1;
       if (photo.rating !== star) changed += 1;
       photo.rating = star;
