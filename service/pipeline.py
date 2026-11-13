@@ -67,7 +67,7 @@ def analyze(items: list[dict], want_tags: bool = True, force: bool = False) -> d
 
         meta = exif_tool.lookup(metas, raw_path)
         cached = None if force else store.get(raw_path, stat.st_size, stat.st_mtime)
-        cache_ok = cached and (
+        cache_ok = cached and cached.get("scoring_version") == scoring.SCORE_VERSION and (
             not want_tags
             or (cached.get("tags") is not None
                 and cached.get("tags_version") == clip_tagger.LABELS_VERSION)
@@ -98,6 +98,7 @@ def analyze(items: list[dict], want_tags: bool = True, force: bool = False) -> d
             "score": scored,
             "tags": tags,
             "tags_version": clip_tagger.LABELS_VERSION if tags is not None else None,
+            "scoring_version": scoring.SCORE_VERSION,
             "exif": {
                 key: meta[key]
                 for key in ("Model", "LensModel", "ISO", "FNumber", "ExposureTime",

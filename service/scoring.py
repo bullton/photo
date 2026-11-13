@@ -21,6 +21,9 @@ DEFAULT_WEIGHTS = {
 VERDICT_SHARP = 50.0
 VERDICT_BORDER = 30.0
 
+# 评分逻辑变更时递增，让 SQLite 里的旧结果失效重算（不改标签也要重算分数）。
+SCORE_VERSION = 2
+
 LOW_DETAIL = 0.15  # 纹理占比低于此值时不下“虚焦”结论，只标待定
 
 
