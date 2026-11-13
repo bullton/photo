@@ -630,6 +630,22 @@
     return 'blur';
   }
 
+  // 慢门拖影兜底：1/15s 配 420mm 时船体整体糊掉，但水面纹理仍撑高方差，
+  // 单看清晰度会误判成合焦。等效焦距 ≥150mm 且比 1/焦距 再慢 3 档时认定为风险。
+  function slowShutter(exposureSec, focal35) {
+    var seconds = Number(exposureSec);
+    var focal = Number(focal35);
+    if (!Number.isFinite(seconds) || !Number.isFinite(focal)) return false;
+    if (seconds <= 0 || focal < 150) return false;
+    return seconds >= 8 / focal;
+  }
+
+  function verdictWithExif(norm, line, lowTexture, exposureSec, focal35) {
+    var value = verdict(norm, line, lowTexture);
+    if (value === 'sharp' && slowShutter(exposureSec, focal35)) return 'border';
+    return value;
+  }
+
   return {
     version: '1.1.0',
     // Subject sharpness (block-variance median at 1600px) below this reads as
@@ -652,6 +668,8 @@
     colorDistance: colorDistance,
     timeCluster: timeCluster,
     groupPhotos: groupPhotos,
-    verdict: verdict
+    slowShutter: slowShutter,
+    verdict: verdict,
+    verdictWithExif: verdictWithExif
   };
 });

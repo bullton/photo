@@ -22,7 +22,7 @@ VERDICT_SHARP = 50.0
 VERDICT_BORDER = 30.0
 
 # 评分逻辑变更时递增，让 SQLite 里的旧结果失效重算（不改标签也要重算分数）。
-SCORE_VERSION = 2
+SCORE_VERSION = 3
 
 LOW_DETAIL = 0.15  # 纹理占比低于此值时不下“虚焦”结论，只标待定
 
@@ -93,8 +93,27 @@ def motion_score(metrics: dict) -> float:
     return _clamp(100.0 * (1.0 - float(metrics.get("motion_risk", 0.0))))
 
 
-def verdict_of(focus: float, texture_ratio: float) -> str:
-    # 主体本身细节少（剪影、雾天、纯色天空占多数）时无法判断对焦，
+SLOW_SHUTTER_MIN_FOCAL35 = 150.0  # 长焦以下不做慢门判断，避免误伤夜景人像
+SLOW_SHUTTER_STOPS = 3.0  # 比 1/等效焦距 再慢 3 档才算风险
+
+
+def slow_shutter(exposure_sec: float | None, focal35: float | None) -> bool:
+    """判断是否慢到几乎必然拖影（需要 EXIF 的曝光时间与等效焦距）。
+
+    1/15s 配 420mm 时，即使是静态主体也容易因手抖/主体移动整体糊掉；
+    但全局纹理（水面、树叶）仍能保持高频，单看方差会误判成“合焦”。
+    """
+    try:
+        seconds = float(exposure_sec or 0.0)
+        focal = float(focal35 or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if seconds <= 0.0 or focal < SLOW_SHUTTER_MIN_FOCAL35:
+        return False
+    return seconds >= (2.0 ** SLOW_SHUTTER_STOPS) / focal
+
+
+def verdict_of(focus: float, texture_ratio: float) -> str:    # 主体本身细节少（剪影、雾天、纯色天空占多数）时无法判断对焦，
     # 宁可标“待定”也不要误杀。
     if texture_ratio < LOW_DETAIL and focus < VERDICT_SHARP * 1.8:
         return "border"
@@ -144,6 +163,8 @@ def score_photo(
     weights: dict | None = None,
     iso: float | None = None,
     scenes: set[str] | tuple[str, ...] | None = None,
+    exposure_sec: float | None = None,
+    focal35: float | None = None,
 ) -> dict:
     """返回分项分、综合分、判定与星级建议。"""
     config = load_config()
@@ -159,6 +180,11 @@ def score_photo(
     composite = sum(parts[key] * weight_map[key] for key in weight_map)
     verdict = verdict_of(parts["focus"], float(metrics.get("texture_ratio", 0.0)))
     star = star_for(composite, verdict)
+    shutter_risk = slow_shutter(exposure_sec, focal35)
+    if shutter_risk and verdict == "sharp":
+        # 全局纹理会被背景（水面、树叶）撑高，慢门拖影只能靠 EXIF 兜底。
+        verdict = "border"
+        star = min(star, 2)
     scene_keys = set(scenes or ())
     night = bool(scene_keys & NIGHT_CLASSES) or looks_like_night(metrics)
     if night:
@@ -173,4 +199,5 @@ def score_photo(
         "verdict": verdict,
         "star": star,
         "night": night,
+        "slow_shutter": shutter_risk,
     }

@@ -521,6 +521,7 @@ select option { background: #14171a; color: var(--text); }
 .chip-subject { color: var(--accent-strong); border-color: rgba(226, 169, 79, 0.32); }
 .chip-noaf { color: var(--text-faint); border-color: rgba(255, 255, 255, 0.16); }
 .chip-exposure { color: var(--blur); border-color: rgba(239, 138, 126, 0.32); }
+.chip-slow { color: var(--border-line); border-color: rgba(226, 169, 79, 0.34); }
 .chip-rank { color: var(--accent-strong); border-color: rgba(226, 169, 79, 0.26); }
 .chip-single { color: var(--text-faint); border-color: rgba(255, 255, 255, 0.1); }
 
@@ -1478,7 +1479,10 @@ select option { background: #14171a; color: var(--text); }
       analysis: photo.analysis,
       ai: photo.ai || null,
       aiError: photo.aiError || '',
-      time: photo.time
+      time: photo.time,
+      shutter: photo.shutter || 0,
+      focal35: photo.focal35 || 0,
+      slowShutter: !!photo.slowShutter
     };
   }
 
@@ -1592,6 +1596,9 @@ select option { background: #14171a; color: var(--text); }
           photo.xmpRating = Number.isFinite(Number(photo.xmpRating)) ? clamp(Number(photo.xmpRating), 0, 5) : 0;
         });
         state.photos = photos;
+        photos.forEach(function (photo) {
+          if (!photo.slowShutter) photo.slowShutter = CORE.slowShutter(photo.shutter, photo.focal35);
+        });
         state.seq = Math.max(Number(settings.seq) || 0, maxSeq);
         state.filter = settings.filter || 'all';
         state.sort = settings.sort || 'group';
@@ -1848,10 +1855,12 @@ select option { background: #14171a; color: var(--text); }
     return null;
   }
 
-  // Read DateTimeOriginal (+ SubSecTimeOriginal) and return capture time in
-  // milliseconds. Bursts are detected on this before any pixels are compared.
+  // Read DateTimeOriginal (+ SubSecTimeOriginal), ExposureTime and focal length.
+  // Bursts are detected on the timestamp before any pixels are compared; the
+  // exposure pair feeds the slow-shutter guard (blurred telephoto shots still
+  // show plenty of background texture, so sharpness alone misses them).
   // Accepts NEF/DNG (TIFF at byte 0) and JPEG (Exif inside APP1).
-  function readExifTime(buffer) {
+  function readExifMeta(buffer) {
     var b = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
     if (b.length < 16) return null;
     function r16(o, order) { return order ? (b[o] | (b[o + 1] << 8)) : ((b[o] << 8) | b[o + 1]); }
@@ -1914,6 +1923,16 @@ select option { background: #14171a; color: var(--text); }
       while (s.length < 3) s += '0';
       return Number(s.slice(0, 3));
     }
+    function rational(entry) {
+      if (!entry || entry.type !== 5 || entry.offset + 8 > b.length) return 0;
+      var num = r32(entry.offset, le);
+      var den = r32(entry.offset + 4, le);
+      return den ? num / den : 0;
+    }
+    function shortValue(entry) {
+      if (!entry || entry.type !== 3 || entry.offset + 2 > b.length) return 0;
+      return r16(entry.offset, le);
+    }
     var i0 = ifd(r32(tiffBase + 4, le), tiffBase);
     if (!i0 || !i0[0x8769]) return null;
     var exif = ifd(r32(i0[0x8769].offset, le), tiffBase);
@@ -1921,13 +1940,29 @@ select option { background: #14171a; color: var(--text); }
     var dateEntry = exif[0x9003] || exif[0x9004];
     var text = ascii(dateEntry);
     var m = text && /^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(text);
-    if (!m) return null;
     var ms = fraction(exif[0x9291] || exif[0x9292]);
-    return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], ms);
+    var focal = rational(exif[0x920A]);
+    var focal35 = shortValue(exif[0xA405]) || focal;
+    return {
+      time: m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], ms) : null,
+      shutter: rational(exif[0x829A]),
+      focal35: focal35
+    };
   }
 
-  function formatBytes(bytes) {
-    if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
+  function readExifTime(buffer) {
+    var meta = readExifMeta(buffer);
+    return meta ? meta.time : null;
+  }
+
+  function formatShutter(seconds) {
+    var value = Number(seconds);
+    if (!Number.isFinite(value) || value <= 0) return '';
+    if (value >= 1) return value.toFixed(1) + 's';
+    return '1/' + Math.round(1 / value) + 's';
+  }
+
+  function formatBytes(bytes) {    if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
     if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   }
@@ -1968,7 +2003,7 @@ select option { background: #14171a; color: var(--text); }
   function verdictOf(photo) {
     if (photo.status === 'error') return 'error';
     if (photo.status !== 'done') return 'pending';
-    return CORE.verdict(photo.norm, state.line, photo.lowTexture);
+    return CORE.verdictWithExif(photo.norm, state.line, photo.lowTexture, photo.shutter, photo.focal35);
   }
 
   function matchesFilter(photo) {
@@ -2219,8 +2254,15 @@ select option { background: #14171a; color: var(--text); }
     if (!photo.af) {
       try { photo.af = readAfArea(buffer); } catch (error) { photo.af = null; }
     }
-    if (photo.time == null) {
-      try { photo.time = readExifTime(buffer); } catch (error) { photo.time = null; }
+    if (photo.time == null || !photo.shutter) {
+      try {
+        var exifMeta = readExifMeta(buffer);
+        if (exifMeta) {
+          if (photo.time == null) photo.time = exifMeta.time;
+          if (!photo.shutter) photo.shutter = exifMeta.shutter;
+          if (!photo.focal35) photo.focal35 = exifMeta.focal35;
+        }
+      } catch (error) { photo.time = photo.time == null ? null : photo.time; }
     }
     var candidates = extractJpegCandidates(buffer);
     for (var i = 0; i < candidates.length; i++) {
@@ -2284,7 +2326,12 @@ select option { background: #14171a; color: var(--text); }
   async function analyzePhoto(photo) {
     if (photo.time == null && !isRawFile(photo.file)) {
       try {
-        photo.time = readExifTime(await photo.file.slice(0, 512 * 1024).arrayBuffer());
+        var exifMeta = readExifMeta(await photo.file.slice(0, 512 * 1024).arrayBuffer());
+        if (exifMeta) {
+          photo.time = exifMeta.time;
+          photo.shutter = photo.shutter || exifMeta.shutter;
+          photo.focal35 = photo.focal35 || exifMeta.focal35;
+        }
       } catch (error) { photo.time = null; }
     }
     var source = await decodeImage(photo);
@@ -2320,6 +2367,7 @@ select option { background: #14171a; color: var(--text); }
     photo.hash = CORE.hashLuma(luma, w, h);
     photo.color = CORE.colorGrid(data, w, h, 6);
     photo.exposure = CORE.classifyExposure(result.meanLuma, result.highlightClip, result.shadowClip);
+    photo.slowShutter = CORE.slowShutter(photo.shutter, photo.focal35);
     photo.metric = 'center';
     photo.subject = null;
     photo.subjectP75 = null;
@@ -2783,6 +2831,11 @@ select option { background: #14171a; color: var(--text); }
   function appendStatusChips(container, photo, verdict) {
     container.appendChild(verdictChip(verdict));
     if (photo.lowTexture) container.appendChild(el('span', 'chip chip-lowtex', '低纹理'));
+    if (photo.status === 'done' && photo.slowShutter) {
+      var slow = el('span', 'chip chip-slow', '慢门');
+      slow.title = '曝光 ' + formatShutter(photo.shutter) + ' · ' + Math.round(photo.focal35) + 'mm，手持或主体移动容易拖影，建议放大核对';
+      container.appendChild(slow);
+    }
     if (photo.status === 'done' && photo.exposure !== 'normal') {
       container.appendChild(el('span', 'chip chip-exposure', EXPOSURE_LABEL[photo.exposure] || '曝光异常'));
     }
@@ -2802,6 +2855,7 @@ select option { background: #14171a; color: var(--text); }
     if (photo.status === 'error') return photo.name + '，无法读取';
     if (photo.status === 'pending' || !Number.isFinite(photo.norm)) return photo.name + '，正在分析';
     var text = photo.name + '，相对清晰度 ' + Math.round(photo.norm) + '，' + VERDICT_LABEL[verdict];
+    if (photo.slowShutter) text += '，慢门 ' + formatShutter(photo.shutter) + ' ' + Math.round(photo.focal35) + 'mm 可能拖影';
     if (photo.rating) text += '，' + photo.rating + ' 星';
     if (photo.lowTexture) text += '，低纹理';
     if (photo.exposure !== 'normal') text += '，' + EXPOSURE_LABEL[photo.exposure];

@@ -190,6 +190,16 @@ function main() {
   assert.strictEqual(Core.classifyExposure(200, 0.12, 0.0), 'over');
   assert.strictEqual(Core.classifyExposure(12, 0.0, 0.6), 'under');
 
+  // Slow-shutter guard: 1/15s @420mm is a smear even when water texture keeps
+  // the sharpness score high; short exposures and normal lenses stay untouched.
+  assert.strictEqual(Core.slowShutter(1 / 15, 420), true);
+  assert.strictEqual(Core.slowShutter(1 / 40, 600), true);
+  assert.strictEqual(Core.slowShutter(1 / 100, 600), false);
+  assert.strictEqual(Core.slowShutter(1 / 15, 50), false);
+  assert.strictEqual(Core.slowShutter(0, 420), false);
+  assert.strictEqual(Core.verdictWithExif(90, 50, false, 1 / 320, 420), 'sharp');
+  assert.strictEqual(Core.verdictWithExif(90, 50, false, 1 / 15, 420), 'border');
+
   const seq = Core.parseShotSequence('DSC_8715.NEF');
   assert.strictEqual(seq.prefix, 'dsc_');
   assert.strictEqual(seq.number, 8715);

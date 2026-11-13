@@ -112,6 +112,32 @@ class ScoringTest(unittest.TestCase):
         fine = {"highlight_clip": 0.0, "shadow_clip": 0.0, "mean": 128.0}
         self.assertLess(scoring.exposure_score(clipped), scoring.exposure_score(fine))
 
+    def test_slow_shutter_needs_telephoto(self):
+        self.assertTrue(scoring.slow_shutter(1 / 15, 420))
+        self.assertTrue(scoring.slow_shutter(1 / 40, 600))
+        self.assertFalse(scoring.slow_shutter(1 / 100, 600))
+        self.assertFalse(scoring.slow_shutter(1 / 15, 50))
+        self.assertFalse(scoring.slow_shutter(None, 420))
+        self.assertFalse(scoring.slow_shutter(1 / 15, None))
+
+    def test_slow_shutter_caps_sharp_verdict(self):
+        # 5527 那类画面：水面高频纹理把 focus 撑到 90，实际是 1/15s @420mm 拖影。
+        metrics = {
+            "focus_norm": 0.92,
+            "motion_risk": 0.37,
+            "texture_ratio": 0.99,
+            "exposure": {"mean": 179.0, "highlight_clip": 0.0, "shadow_clip": 0.0},
+            "noise": {"sigma": 0.6},
+            "subject": {"share": 1.0},
+        }
+        fast = scoring.score_photo(metrics, exposure_sec=1 / 320, focal35=420)
+        self.assertEqual(fast["verdict"], "sharp")
+        self.assertFalse(fast["slow_shutter"])
+        slow = scoring.score_photo(metrics, exposure_sec=1 / 15, focal35=420)
+        self.assertTrue(slow["slow_shutter"])
+        self.assertEqual(slow["verdict"], "border")
+        self.assertLessEqual(slow["star"], 2)
+
     def test_night_shots_are_not_rejected(self):
         night = {
             "focus_norm": 0.08,

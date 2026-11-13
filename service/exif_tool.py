@@ -21,6 +21,7 @@ FIELDS = (
     "FNumber",
     "ExposureTime",
     "FocalLength",
+    "ScaleFactor35efl",
     "AFAreaMode",
     "AFPointsUsed",
     "FocusLocation",
@@ -122,8 +123,12 @@ def read(paths: list[str], timeout: float = 90.0) -> dict[str, dict]:
         return {}
 
     out: dict[str, dict] = {}
-    for row in rows:
-        source = row.get("SourceFile")
+    wanted = [str(Path(path)) for path in paths]
+    # ExifTool on Windows prints SourceFile in the console code page, so Chinese
+    # paths come back mojibake and cannot be matched by string. -json keeps one
+    # row per input in the same order, so pair them positionally instead.
+    for index, row in enumerate(rows):
+        source = wanted[index] if index < len(wanted) else row.get("SourceFile")
         if not source:
             continue
         entry = {key: row[key] for key in FIELDS if key in row}

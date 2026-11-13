@@ -165,6 +165,7 @@
     var bits = [];
     bits.push('运动模糊风险 ' + Math.round((ai.motionRisk || 0) * 100) + '%');
     bits.push('纹理覆盖 ' + Math.round((ai.textureRatio || 0) * 100) + '%');
+    if (ai.slowShutter) bits.push('慢门拖影（已按临界处理）');
     if (ai.groupBest) bits.push('组内最佳');
     if (ai.groupDup) bits.push('组内重复（已降为 1 星）');
     if (ai.exif && ai.exif.ISO) bits.push('ISO ' + Math.round(ai.exif.ISO));
@@ -238,6 +239,7 @@
           textureRatio: item.metrics.texture_ratio,
           tags: item.tags || [],
           exif: item.exif || {},
+          slowShutter: !!item.score.slow_shutter,
           cached: !!item.cached
         };
         photo.cacheDirty = true;

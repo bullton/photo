@@ -44,6 +44,23 @@ def _iso(meta: dict) -> float | None:
     return value if value > 0 else None
 
 
+def _number(meta: dict, key: str) -> float | None:
+    try:
+        value = float(meta.get(key))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _focal35(meta: dict) -> float | None:
+    """等效 35mm 焦距；机身没给折算系数时按原焦距算，宁可漏判也不误伤。"""
+    focal = _number(meta, "FocalLength")
+    if focal is None:
+        return None
+    scale = _number(meta, "ScaleFactor35efl") or 1.0
+    return focal * scale
+
+
 def analyze(items: list[dict], want_tags: bool = True, force: bool = False) -> dict:
     """items: [{id, path}]；返回逐项结果与整体状态。"""
     store = library.get_library()
@@ -91,7 +108,13 @@ def analyze(items: list[dict], want_tags: bool = True, force: bool = False) -> d
                 tags = tagger.tag(loaded["image"])
         # 先出标签再评分：星空/夜景需要场景类目来避免被当成废片。
         scenes = {tag["key"] for tag in tags} if tags else None
-        scored = scoring.score_photo(measured, iso=_iso(meta), scenes=scenes)
+        scored = scoring.score_photo(
+            measured,
+            iso=_iso(meta),
+            scenes=scenes,
+            exposure_sec=_number(meta, "ExposureTime"),
+            focal35=_focal35(meta),
+        )
 
         payload = {
             "metrics": _compact(measured),
@@ -102,7 +125,8 @@ def analyze(items: list[dict], want_tags: bool = True, force: bool = False) -> d
             "exif": {
                 key: meta[key]
                 for key in ("Model", "LensModel", "ISO", "FNumber", "ExposureTime",
-                            "FocalLength", "DateTimeOriginal", "AFAreaMode", "af_kind")
+                            "FocalLength", "ScaleFactor35efl", "DateTimeOriginal",
+                            "AFAreaMode", "af_kind")
                 if meta.get(key) is not None
             },
             "preview": {
