@@ -136,14 +136,17 @@ class Bridge:
     """暴露给页面的原生能力。"""
 
     def __init__(self) -> None:
-        self.window: webview.Window | None = None
+        # 必须用私有属性：pywebview 会递归遍历 js_api 的公开属性来生成函数表，
+        # 公开持有 Window 会一路走进 WinForms 原生对象（AccessibilityObject…），
+        # 触发 maximum recursion depth exceeded，窗口启动直接卡死。
+        self._win: webview.Window | None = None
 
     def attach(self, window: webview.Window) -> None:
-        self.window = window
+        self._win = window
 
     def _window(self) -> webview.Window | None:
-        if self.window is not None:
-            return self.window
+        if self._win is not None:
+            return self._win
         return webview.windows[0] if webview.windows else None
 
     def choose_files(self) -> dict:

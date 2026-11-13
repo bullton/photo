@@ -104,23 +104,38 @@ def load_preview(path: str | Path, long_edge: int = PREVIEW_LONG_EDGE) -> dict:
     for blob in buffers:
         try:
             image = Image.open(io.BytesIO(blob))
+            orig_width, orig_height = image.size
+            if orig_width < 64 or orig_height < 64:
+                continue
+            try:
+                orientation = image.getexif().get(0x0112, 1)
+            except Exception:  # noqa: BLE001
+                orientation = 1
+            scale = long_edge / float(max(orig_width, orig_height))
+            # 先用 draft 让 JPEG 解码器按 DCT 缩放只在低分辨率下解码：
+            # 6000px 的 RAW 内嵌预览直接全尺寸解码 + LANCZOS 要 1s 以上，
+            # draft 后通常降到 0.1s 级，肉眼无差别。
+            if scale < 1.0 and (image.format or "").upper() == "JPEG":
+                image.draft(
+                    "RGB",
+                    (max(1, round(orig_width * scale)), max(1, round(orig_height * scale))),
+                )
             image.load()
             image = ImageOps.exif_transpose(image)
+            if orientation in (5, 6, 7, 8):
+                orig_width, orig_height = orig_height, orig_width
+            image = image.convert("RGB") if image.mode != "RGB" else image
             width, height = image.size
-            if width < 64 or height < 64:
-                continue
-            image = image.convert("RGB")
-            scale = long_edge / float(max(width, height))
-            resample = Image.LANCZOS
-            if scale < 1.0:
+            if max(width, height) > long_edge:
+                current = long_edge / float(max(width, height))
                 image = image.resize(
-                    (max(1, round(width * scale)), max(1, round(height * scale))),
-                    resample,
+                    (max(1, round(width * current)), max(1, round(height * current))),
+                    Image.LANCZOS,
                 )
             return {
                 "image": image,
-                "source_width": width,
-                "source_height": height,
+                "source_width": orig_width,
+                "source_height": orig_height,
                 "preview_bytes": len(blob),
                 "embedded": bool(candidates),
             }

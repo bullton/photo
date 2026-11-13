@@ -166,12 +166,15 @@ pip install torch --index-url https://download.pytorch.org/whl/cu126
 
 | 阶段 | 耗时 |
 | --- | --- |
-| 取内嵌预览 + 缩到 1600px | ~0.35 s |
+| 取内嵌预览 + 缩到 1600px | ~0.15 s（JPEG `draft` 降采样解码） |
 | 指标计算 | ~0.26 s |
 | CLIP 推理（CUDA fp16） | ~0.03 s |
-| 整条流水线（含 ExifTool、缓存写入） | **~0.87 s/张**（8 张热跑 6.9 s） |
+| 整条流水线（含 ExifTool、缓存写入） | **~0.6 s/张**（8 张热跑 4.9 s） |
 
 - 命中 SQLite 缓存后约 2 ms/张，缓存键为路径 + 大小 + mtime；
+- 预览解码先用 `Image.draft` 让 JPEG 解码器按 DCT 缩放，30MB NEF 的内嵌预览
+  从全尺寸解码（>1 s）降到 0.15 s 级；
+- 前端按 8 张一批请求，进度每批刷新，避免大目录时进度条长时间不动；
 - CLIP 显存峰值约 320 MB，4GB 显卡余量充足；
 - GPU 不可用（无卡、驱动异常、fp16 不支持）会自动退回 CPU，功能不变；
 - 注意：`nvidia-smi` 报 NVML 初始化失败并不代表 CUDA 不可用——
