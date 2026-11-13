@@ -112,18 +112,22 @@ class Tagger:
         model_id = os.environ.get("PHOTOPLUS_CLIP_MODEL", DEFAULT_MODEL)
         allow_download = os.environ.get("PHOTOPLUS_CLIP_ALLOW_DOWNLOAD") == "1"
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        dtype = torch.float16 if self.device == "cuda" else torch.float32
         try:
-            self._processor = CLIPProcessor.from_pretrained(
-                model_id, local_files_only=not allow_download
-            )
-            self._model = CLIPModel.from_pretrained(
-                model_id, torch_dtype=dtype, local_files_only=not allow_download
-            ).to(self.device).eval()
+            self._load_on(model_id, allow_download, torch)
         except Exception as error:  # noqa: BLE001
-            self._error = f"模型未就绪（{model_id}）：{error.__class__.__name__}"
-            self._model = None
-            return False
+            if self.device == "cuda":
+                # 驱动版本过旧、显存不足或 fp16 不被支持时退回 CPU，而不是整块功能不可用。
+                self.device = "cpu"
+                try:
+                    self._load_on(model_id, allow_download, torch)
+                except Exception as retry_error:  # noqa: BLE001
+                    self._error = f"模型未就绪（{model_id}）：{retry_error.__class__.__name__}"
+                    self._model = None
+                    return False
+            else:
+                self._error = f"模型未就绪（{model_id}）：{error.__class__.__name__}"
+                self._model = None
+                return False
 
         prompts: list[str] = []
         owners: list[str] = []
@@ -139,6 +143,17 @@ class Tagger:
         self._owners = owners
         self._torch = torch
         return True
+
+    def _load_on(self, model_id: str, allow_download: bool, torch) -> None:
+        from transformers import CLIPModel, CLIPProcessor
+
+        dtype = torch.float16 if self.device == "cuda" else torch.float32
+        self._processor = CLIPProcessor.from_pretrained(
+            model_id, local_files_only=not allow_download
+        )
+        self._model = CLIPModel.from_pretrained(
+            model_id, torch_dtype=dtype, local_files_only=not allow_download
+        ).to(self.device).eval()
 
     def tag(self, image) -> list[dict]:
         """返回按概率降序的标签（最多 TOP_K 个，低于阈值丢弃）。"""

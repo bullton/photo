@@ -55,18 +55,19 @@ def _jpeg_dims(data: bytes, start: int, end: int) -> tuple[int, int] | None:
 
 
 def find_jpeg_candidates(data: bytes) -> list[dict]:
-    """返回按面积降序排列的预览候选。"""
+    """返回按面积降序排列的预览候选。
+
+    用 bytes.find 定位 SOI，而不是逐字节循环：30MB 的 NEF 在 Python 里逐字节
+    判断要 1s 以上，改为 C 层查找后约 10ms。
+    """
     found: list[dict] = []
     n = len(data)
-    i = 0
-    while i + 3 < n:
-        if data[i] != 0xFF or data[i + 1] != 0xD8:
-            i += 1
-            continue
+    i = data.find(b"\xff\xd8", 0)
+    while i >= 0 and i + 3 < n:
         limit = min(n, i + 12 * 1024 * 1024)
         end = data.find(b"\xff\xd9", i + 2, limit)
         if end < 0:
-            i += 1
+            i = data.find(b"\xff\xd8", i + 2)
             continue
         end += 2
         dims = _jpeg_dims(data, i, end)
@@ -82,7 +83,7 @@ def find_jpeg_candidates(data: bytes) -> list[dict]:
             )
             if plausible:
                 found.append({"start": i, "end": end, "area": area, "width": width, "height": height})
-        i = end
+        i = data.find(b"\xff\xd8", end)
     found.sort(key=lambda item: item["area"], reverse=True)
     return found
 

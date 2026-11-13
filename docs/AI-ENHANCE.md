@@ -130,14 +130,36 @@ ExifTool 为可选项（用于 ISO、机身、对焦框）。程序会按以下�
 检测不到就少这些字段，不影响评分。Nikon Z 30 实测能读到 ISO / 机身 / 镜头，
 但机内不写 `FocusLocation`，因此仍退回中心区。
 
+## GPU 加速
+
+自动标签默认走 GPU：装了 CUDA 版 torch 时 `clip.device` 为 `cuda`，否则 `cpu`。
+换装命令：
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu126
+```
+
+加载失败（显存不足、fp16 不支持、驱动过旧）会清空模型并退回 CPU 重试一次，
+不会让“自动标签”整块不可用。判断是否真的在用 GPU，看
+`/api/ai/status` 里的 `clip.device`，不要依赖 `nvidia-smi`。
+
 ## 性能
 
-- 纯 CPU 评分：1600px 预览约 0.4–0.6 s/张；
+实测环境：Nikon Z 30 NEF（30MB/张，内嵌 5568×3712 JPEG），RTX 3050 Laptop 4GB。
+
+| 阶段 | 耗时 |
+| --- | --- |
+| 取内嵌预览 + 缩到 1600px | ~0.35 s |
+| 指标计算 | ~0.26 s |
+| CLIP 推理（CUDA fp16） | ~0.03 s |
+| 整条流水线（含 ExifTool、缓存写入） | **~0.87 s/张**（8 张热跑 6.9 s） |
+
 - 命中 SQLite 缓存后约 2 ms/张，缓存键为路径 + 大小 + mtime；
-- 叠加 CPU 版 CLIP 标签：实测 Nikon Z 30 NEF 8 张共 23 s（约 2.9 s/张，
-  模型加载首次约 8 s，之后每张 0.06 s 推理）；
-- CLIP 有可用的 NVIDIA GPU 时自动用 fp16（约 2 GB 显存）；
-  NVML 初始化失败（驱动 / 虚拟化限制）会退回 CPU，速度慢但功能完整。
+- CLIP 显存峰值约 320 MB，4GB 显卡余量充足；
+- GPU 不可用（无卡、驱动异常、fp16 不支持）会自动退回 CPU，功能不变；
+- 注意：`nvidia-smi` 报 NVML 初始化失败并不代表 CUDA 不可用——
+  本机就是 `nvidia-smi` 失败但 `torch.cuda.is_available()` 为 True，
+  判断标准应是 torch 的返回值，而不是 NVML 工具。
 
 ## 测试
 

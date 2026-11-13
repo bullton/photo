@@ -37,6 +37,8 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 # 可选：启用自动标签（CLIP，需要 torch + transformers）
 .venv/bin/pip install -r requirements-ai.txt
+# 有 NVIDIA 显卡时改装 CUDA 版，标签推理会走 GPU
+.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cu126
 .venv/bin/python app.py
 ```
 

@@ -1,6 +1,10 @@
 # 可选：自动标签（CLIP 零样本分类）
 # 不装也能用：评分、星级建议、XMP 只依赖 requirements.txt 里的 numpy + Pillow。
 # 首次使用需要联网下载 CLIP 权重，之后离线可用。
+#
+# 有 NVIDIA 显卡时建议装 CUDA 版（GPU 推理，显存约 320MB）：
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+# 只装默认的 CPU 版也能跑，速度慢一些；GPU 加载失败会自动退回 CPU。
 
 torch>=2.2
 transformers>=4.40
