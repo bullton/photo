@@ -106,9 +106,16 @@ composite = Σ(part_i × weight_i)     # 默认 45/15/15/10/15，见 config/scor
   - 南宁舰（052D）`warship` 0.99–1.00，同批军港照片全部命中；
   - 货轮 → `ship`，帆船 → `boat`，客机 → `aircraft`，跑车 → `vehicle`；
   - 3D 渲染壁纸会落入拒识类 `other`，不输出标签。
+- 防误标：船只提示词必须带视觉锚点（灰色舰体、火炮、舷号），否则红色拖轮、
+  直升机剪影都会被吸到 `warship`。再加两道门槛：
+  - 分类概率下限 `MIN_PROB=0.30`，且 `warship` 需 ≥0.80、`ship` ≥0.75、
+    `boat` ≥0.55；
+  - top1 与 top2 差距 <0.06 且 top1 <0.9 时视为模棱两可，直接不打标签。
+  实测效果：船形建筑、拖轮、直升机不再标成军舰（拖轮 → `boat`，直升机 →
+  `aircraft`，船形建筑不标），真军舰仍是 0.95–1.00。
 - 标签用「每类提示词向量取平均后再 softmax」，避免单条措辞过度自信；
   `other` 只参与拒识、不写成 `AI/other`。改标签或提示词后递增
-  `LABELS_VERSION`，旧缓存会自动失效重算。
+  `LABELS_VERSION`，旧缓存会自动失效重算（当前为 3）。
 - 兼容性：transformers 5 的 `get_text_features` / `get_image_features` 返回
   **未投影**的模型输出，直接点积会让图文空间错位（表现为“航母 → 家庭”）。
   这里显式走 `text_model → text_projection` 与 `vision_model → visual_projection`。

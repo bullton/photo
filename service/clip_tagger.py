@@ -13,17 +13,36 @@ import threading
 DEFAULT_MODEL = "openai/clip-vit-base-patch32"
 
 # 改标签或提示词后递增，用来让旧的分析缓存失效。
-LABELS_VERSION = 2
+LABELS_VERSION = 3
 
 LABELS: dict[str, dict] = {
     "bird": {"zh": "鸟类", "prompts": ["a photo of a bird", "a close-up photo of a bird in the wild", "a bird in flight"]},
     "wildlife": {"zh": "野生动物", "prompts": ["a photo of a wild animal", "a wildlife photo of an animal in nature"]},
     "pet": {"zh": "宠物", "prompts": ["a photo of a pet cat or dog", "a portrait of a pet"]},
-    "warship": {"zh": "军舰", "prompts": ["a photo of a navy warship at sea", "a photo of a military ship with guns and radar", "a photo of a destroyer or frigate"]},
-    "ship": {"zh": "船只", "prompts": ["a photo of a large ship at sea", "a photo of a cargo ship or cruise liner", "a photo of a ferry on the water"]},
-    "boat": {"zh": "小船", "prompts": ["a photo of a small boat", "a photo of a sailboat on the water", "a photo of a fishing boat"]},
-    "aircraft": {"zh": "飞机", "prompts": ["a photo of an airplane", "a photo of an airliner on the runway", "a photo of a fighter jet in the sky"]},
-    "vehicle": {"zh": "车辆", "prompts": ["a photo of a car", "a photo of a sports car", "a photo of a motorcycle", "a photo of a truck or bus on the road"]},
+    # 提示词必须写“灰色舰体/火炮/舷号”这类视觉锚点：只写“军舰”时，
+    # 红色拖轮、直升机剪影都会被吸到 warship，导致整组照片全标军舰。
+    "warship": {"zh": "军舰", "prompts": [
+        "a photo of a large gray navy warship with guns, missiles and a radar mast",
+        "a photo of a military destroyer or frigate at sea with a pennant number",
+        "a photo of a naval vessel painted navy gray",
+    ]},
+    "ship": {"zh": "船只", "prompts": [
+        "a photo of a large cargo ship or container ship",
+        "a photo of a bulk carrier or oil tanker on the ocean",
+        "a photo of a passenger ferry or cruise ship",
+    ]},
+    "boat": {"zh": "小船", "prompts": [
+        "a photo of a small motorboat or speedboat",
+        "a photo of a fishing boat or tugboat",
+        "a photo of a sailboat with sails",
+    ]},
+    "aircraft": {"zh": "飞机", "prompts": [
+        "a photo of an airplane in the sky",
+        "a photo of an airliner on the runway",
+        "a photo of a helicopter in flight",
+        "a photo of a fighter jet",
+    ]},
+    "vehicle": {"zh": "车辆", "prompts": ["a photo of a car on the road", "a photo of a sports car", "a photo of a motorcycle", "a photo of a truck or bus"]},
     "landscape": {"zh": "风光", "prompts": ["a landscape photo", "a wide scenic view of nature"]},
     "astrophotography": {"zh": "星空", "prompts": ["an astrophotography photo of the milky way and stars", "a night sky full of stars"]},
     "night_scene": {"zh": "夜景", "prompts": ["a night photo of a city or building", "a low light scene at night"]},
@@ -32,14 +51,23 @@ LABELS: dict[str, dict] = {
     "street": {"zh": "街拍", "prompts": ["a street photography photo of people in a city", "a candid street scene"]},
     "macro": {"zh": "微距", "prompts": ["an extreme close-up macro photo of a small subject", "a macro photo of an insect"]},
     "flower": {"zh": "花卉", "prompts": ["a close-up photo of a flower", "a photo of blooming flowers"]},
-    "architecture": {"zh": "建筑", "prompts": ["an architecture photo of a building", "a photo of an interior or building"]},
+    "architecture": {"zh": "建筑", "prompts": [
+        "a photo of a building exterior",
+        "a photo of a modern building facade",
+        "a photo of a building on the waterfront",
+        "an interior photo of a room",
+    ]},
     "food": {"zh": "食物", "prompts": ["a photo of food on a table", "a close-up photo of a dish"]},
     "document": {"zh": "文档/屏幕", "prompts": ["a photo of a document or screen", "a screenshot or scanned paper"]},
     "other": {"zh": "其他", "prompts": ["a photo of something else", "an abstract image", "a 3d render wallpaper"]},
 }
 
 TOP_K = 3
-MIN_PROB = 0.15
+MIN_PROB = 0.30
+# top1 与 top2 太接近说明 CLIP 自己也没把握，宁可不打标签。
+MARGIN = 0.06
+# 船只细分最容易误判（船形建筑、拖轮、直升机），单独抬高门槛。
+CLASS_FLOOR = {"warship": 0.80, "ship": 0.75, "boat": 0.55}
 
 
 def status() -> dict:
@@ -90,6 +118,30 @@ def _text_features(model, tokenizer_output):
 def _image_features(model, pixel_values):
     out = model.vision_model(pixel_values=pixel_values)
     return model.visual_projection(out.pooler_output)
+
+
+def select(ranked: list[tuple[str, float]]) -> list[dict]:
+    """把（类别, 概率）排名转成最终标签，带拒识与置信度门槛。"""
+    if not ranked:
+        return []
+    top_key, top_p = ranked[0]
+    # "other" 最大时说明不属于任何已知类别，直接不打标签。
+    if top_key == "other":
+        return []
+    runner = ranked[1][1] if len(ranked) > 1 else 0.0
+    if top_p < CLASS_FLOOR.get(top_key, MIN_PROB):
+        return []
+    # 高置信度时才允许两个类别接近；否则视为模棱两可。
+    if top_p < 0.9 and top_p - runner < MARGIN:
+        return []
+    out = []
+    for key, prob in ranked:
+        if key == "other" or len(out) >= TOP_K:
+            break
+        if prob < max(MIN_PROB, CLASS_FLOOR.get(key, 0.0)):
+            continue
+        out.append({"key": key, "zh": LABELS[key]["zh"], "p": round(prob, 3)})
+    return out
 
 
 class Tagger:
@@ -194,13 +246,7 @@ class Tagger:
             key=lambda item: item[1],
             reverse=True,
         )
-        # "other" 只作为拒识类参与 softmax，不写成 AI/other 标签：
-        # 它最大的时候说明这张图不属于任何已知类别，宁可不打标签。
-        return [
-            {"key": key, "zh": LABELS[key]["zh"], "p": round(prob, 3)}
-            for key, prob in ranked
-            if key != "other" and prob >= MIN_PROB
-        ][:TOP_K]
+        return select(ranked)
 
 
 _tagger: Tagger | None = None

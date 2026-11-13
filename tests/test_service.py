@@ -228,7 +228,32 @@ class ClipLabelsTest(unittest.TestCase):
 
     def test_version_bumps_with_labels(self):
         self.assertIsInstance(clip_tagger.LABELS_VERSION, int)
-        self.assertGreaterEqual(clip_tagger.LABELS_VERSION, 2)
+        self.assertGreaterEqual(clip_tagger.LABELS_VERSION, 3)
+
+    def test_confident_warship_kept(self):
+        tags = clip_tagger.select([("warship", 0.99), ("ship", 0.004), ("boat", 0.002)])
+        self.assertEqual([tag["key"] for tag in tags], ["warship"])
+
+    def test_tugboat_is_not_warship(self):
+        tags = clip_tagger.select([("boat", 0.77), ("warship", 0.12), ("ship", 0.10)])
+        self.assertEqual(tags[0]["key"], "boat")
+        self.assertNotIn("warship", [tag["key"] for tag in tags])
+
+    def test_helicopter_is_aircraft(self):
+        tags = clip_tagger.select([("aircraft", 0.81), ("warship", 0.13)])
+        self.assertEqual(tags[0]["key"], "aircraft")
+
+    def test_ship_shaped_building_is_rejected(self):
+        ranked = [("ship", 0.49), ("warship", 0.31), ("boat", 0.13), ("aircraft", 0.06)]
+        self.assertEqual(clip_tagger.select(ranked), [])
+
+    def test_ambiguous_top_is_rejected(self):
+        ranked = [("warship", 0.39), ("aircraft", 0.37), ("bird", 0.04)]
+        self.assertEqual(clip_tagger.select(ranked), [])
+
+    def test_other_suppresses_everything(self):
+        ranked = [("other", 0.55), ("family", 0.30), ("street", 0.05)]
+        self.assertEqual(clip_tagger.select(ranked), [])
 
 
 if __name__ == "__main__":
