@@ -1,6 +1,12 @@
-﻿/* AIEnhance 鈥?鏈湴 AI 璇勫垎 / 鑷姩鏍囩鐨勫墠绔帴绾裤€? *
- * 鍙礋璐ｄ笁浠朵簨锛? * 1. 鎶婂凡瀹屾垚鐨勭収鐗囪矾寰勫彂缁欐湰鍦板垎鏋愭湇鍔★紝鎷垮洖鍒嗛」鍒嗕笌鏍囩锛? * 2. 鍦ㄥ崱鐗囧拰澶у浘涓婅ˉ涓€涓彲瑙ｉ噴鐨勮瘎鍒嗗潡锛? * 3. 鎸夊缓璁垎鎵归噺鎵撴槦锛堝皧閲嶆墜鍔ㄦ墦鏄燂級銆? *
- * 鏈嶅姟涓嶅彲鐢紙缃戦〉鐗堢洿鎺ユ墦寮€銆佹垨鏈畨瑁呬緷璧栵級鏃跺叏閮ㄩ潤榛橀檷绾с€? */
+/* AIEnhance — 本地 AI 评分 / 自动标签的前端接线。
+ *
+ * 只负责三件事：
+ * 1. 把已完成的照片路径发给本地分析服务，拿回分项分与标签；
+ * 2. 在卡片和大图上补一个可解释的评分块；
+ * 3. 按建议分批量打星（尊重手动打星）。
+ *
+ * 服务不可用（网页版直接打开、或未安装依赖）时全部静默降级。
+ */
 (function (root) {
   'use strict';
 
@@ -65,8 +71,8 @@
   }
 
   function statusText(done, total) {
-    if (!total) return '灏氭湭鍒嗘瀽';
-    return done + ' / ' + total + ' 寮犲凡澧炲己';
+    if (!total) return '尚未分析';
+    return done + ' / ' + total + ' 张已增强';
   }
 
   function chipsFor(tags) {
@@ -76,7 +82,7 @@
       var chip = document.createElement('span');
       chip.className = 'ai-tag';
       chip.textContent = tag.zh || tag.key;
-      chip.title = (tag.zh || tag.key) + ' 路 ' + Math.round((tag.p || 0) * 100) + '%';
+      chip.title = (tag.zh || tag.key) + ' · ' + Math.round((tag.p || 0) * 100) + '%';
       row.appendChild(chip);
     });
     return row;
@@ -89,12 +95,12 @@
     var composite = Math.round(ai.composite || 0);
     var badge = document.createElement('span');
     badge.className = 'ai-badge' + (composite < 50 ? ' is-low' : (composite < 68 ? ' is-weak' : ''));
-    badge.title = '缁煎悎鍒?' + composite + ' 路 瀵圭劍 ' + Math.round(ai.parts.focus) +
-      ' 路 杩愬姩妯＄硦椋庨櫓 ' + Math.round((ai.motionRisk || 0) * 100) + '%';
+    badge.title = '综合分 ' + composite + ' · 对焦 ' + Math.round(ai.parts.focus) +
+      ' · 运动模糊风险 ' + Math.round((ai.motionRisk || 0) * 100) + '%';
     badge.appendChild(document.createTextNode('AI ' + composite));
     if (ai.star === 0) {
       var low = document.createElement('small');
-      low.textContent = '寤鸿搴熺墖';
+      low.textContent = '建议废片';
       badge.appendChild(low);
     }
     if (media) media.appendChild(badge);
@@ -137,19 +143,19 @@
     score.textContent = String(Math.round(ai.composite));
     var hint = document.createElement('span');
     hint.className = 'ai-viewer-hint';
-    var verdictText = ai.verdict === 'sharp' ? '鍚堢劍' : (ai.verdict === 'border' ? '涓寸晫' : '澶辩劍');
-    hint.textContent = '缁煎悎鍒?路 ' + verdictText + ' 路 寤鸿 ' + (ai.star || 0) + ' 鏄?;
+    var verdictText = ai.verdict === 'sharp' ? '合焦' : (ai.verdict === 'border' ? '临界' : '失焦');
+    hint.textContent = '综合分 · ' + verdictText + ' · 建议 ' + (ai.star || 0) + ' 星';
     head.appendChild(score);
     head.appendChild(hint);
     mount.appendChild(head);
 
     var bars = document.createElement('div');
     bars.className = 'ai-bars';
-    bars.appendChild(bar('瀵圭劍', ai.parts.focus));
-    bars.appendChild(bar('绋冲畾鎬?, ai.parts.motion));
-    bars.appendChild(bar('鏇濆厜', ai.parts.exposure));
-    bars.appendChild(bar('鍣０', ai.parts.noise));
-    bars.appendChild(bar('涓讳綋', ai.parts.subject));
+    bars.appendChild(bar('对焦', ai.parts.focus));
+    bars.appendChild(bar('稳定性', ai.parts.motion));
+    bars.appendChild(bar('曝光', ai.parts.exposure));
+    bars.appendChild(bar('噪声', ai.parts.noise));
+    bars.appendChild(bar('主体', ai.parts.subject));
     mount.appendChild(bars);
 
     if (ai.tags && ai.tags.length) mount.appendChild(chipsFor(ai.tags));
@@ -157,11 +163,11 @@
     var note = document.createElement('p');
     note.className = 'ai-note';
     var bits = [];
-    bits.push('杩愬姩妯＄硦椋庨櫓 ' + Math.round((ai.motionRisk || 0) * 100) + '%');
-    bits.push('绾圭悊瑕嗙洊 ' + Math.round((ai.textureRatio || 0) * 100) + '%');
+    bits.push('运动模糊风险 ' + Math.round((ai.motionRisk || 0) * 100) + '%');
+    bits.push('纹理覆盖 ' + Math.round((ai.textureRatio || 0) * 100) + '%');
     if (ai.exif && ai.exif.ISO) bits.push('ISO ' + Math.round(ai.exif.ISO));
-    if (ai.cached) bits.push('鏉ヨ嚜鏈満缂撳瓨');
-    note.textContent = bits.join(' 路 ');
+    if (ai.cached) bits.push('来自本机缓存');
+    note.textContent = bits.join(' · ');
     mount.appendChild(note);
   }
 
@@ -182,9 +188,9 @@
 
   async function run(photos, options) {
     options = options || {};
-    if (!available()) return { ok: false, error: 'AI 澧炲己闇€瑕佹闈㈢増' };
+    if (!available()) return { ok: false, error: 'AI 增强需要桌面版' };
     var list = collect(photos);
-    if (!list.length) return { ok: false, error: '娌℃湁鍙垎鏋愮殑鐓х墖' };
+    if (!list.length) return { ok: false, error: '没有可分析的照片' };
 
     injectStyles();
     var byId = {};
@@ -206,10 +212,10 @@
       try {
         result = await request('/api/ai/analyze', payload);
       } catch (error) {
-        return { ok: false, error: '鏈湴鍒嗘瀽鏈嶅姟娌℃湁鍝嶅簲', done: updated };
+        return { ok: false, error: '本地分析服务没有响应', done: updated };
       }
       if (!result || result.ok === false) {
-        return { ok: false, error: (result && (result.error || result.reason)) || '鍒嗘瀽澶辫触', done: updated };
+        return { ok: false, error: (result && (result.error || result.reason)) || '分析失败', done: updated };
       }
       if (result.tags) tagState = result.tags;
       (result.results || []).forEach(function (item) {
@@ -217,7 +223,7 @@
         if (!photo) return;
         if (!item.ok) {
           failed += 1;
-          photo.aiError = item.error || '鍒嗘瀽澶辫触';
+          photo.aiError = item.error || '分析失败';
           return;
         }
         photo.ai = {
@@ -246,7 +252,7 @@
     };
   }
 
-  /* 鎸?AI 寤鸿鎵撴槦锛氭墜鍔ㄦ敼杩囩殑鐓х墖涓嶈鐩栵紝缁勫唴鏈€浣宠ˉ涓€鏄熴€?*/
+  /* 按 AI 建议打星：手动改过的照片不覆盖，组内最佳补一星。 */
   function applySuggested(photos, groups, byId) {
     var bestOfGroup = {};
     (groups || []).forEach(function (ids) {
@@ -284,4 +290,3 @@
     injectStyles: injectStyles
   };
 })(typeof self !== 'undefined' ? self : this);
-
