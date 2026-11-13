@@ -1,0 +1,13 @@
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.spec
+assets/AppIcon.iconset/
+.file-versions/
+.od-frames/
+.od-skills/
+index.html.artifact.json
+image.png
