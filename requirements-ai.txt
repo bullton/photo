@@ -1,0 +1,6 @@
+# 可选：自动标签（CLIP 零样本分类）
+# 不装也能用：评分、星级建议、XMP 只依赖 requirements.txt 里的 numpy + Pillow。
+# 首次使用需要联网下载 CLIP 权重，之后离线可用。
+
+torch>=2.2
+transformers>=4.40

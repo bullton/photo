@@ -852,6 +852,7 @@ select option { background: #14171a; color: var(--text); }
         <span class="btn-label-mobile">添加文件夹</span>
       </button>
       <button type="button" class="btn btn-ghost raw-only" id="rawOnlyToggle" aria-pressed="false" title="只导入 RAW，跳过 JPG / PNG 等非 RAW 照片">仅 RAW</button>
+      <button type="button" class="btn btn-ghost" id="aiBtn" title="本地 AI 增强：分项评分与自动标签">AI 评分</button>
       <button type="button" class="btn btn-primary" id="addPhotosBtn">
         <svg class="od-icon" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
           <path d="M8 3.2v9.6M3.2 8h9.6"></path>
@@ -887,6 +888,22 @@ select option { background: #14171a; color: var(--text); }
           <span class="legend-item"><i class="dot dot-blur"></i>失焦</span>
         </div>
         <p class="batch-note" id="batchNote" hidden></p>
+      </section>
+
+      <section class="panel" aria-labelledby="aiHeading">
+        <div class="panel-head">
+          <h2 id="aiHeading">AI 评分</h2>
+          <span class="panel-note mono" id="aiPanelStat">未增强</span>
+        </div>
+        <p class="panel-note">分项打分 + 自动标签，全部在本机运行。综合分 = 对焦、稳定性、曝光、噪声、主体的加权和，可在结果里逐项查看。</p>
+        <div class="ai-panel-row">
+          <button type="button" class="btn btn-ghost" id="aiRunBtn">运行 AI 增强</button>
+          <button type="button" class="btn btn-ghost" id="aiStarsBtn" disabled>应用建议星级</button>
+        </div>
+        <div class="ai-panel-row">
+          <button type="button" class="btn btn-ghost" id="aiXmpBtn" disabled>导出标签到 XMP</button>
+        </div>
+        <p class="panel-note" id="aiPanelNote" hidden></p>
       </section>
 
       <section class="panel" aria-labelledby="filterHeading">
@@ -1075,6 +1092,7 @@ select option { background: #14171a; color: var(--text); }
       <div class="viewer-scroll">
       <div class="viewer-score"><span class="num" id="viewerScore">—</span><span class="unit">/ 100 相对清晰度</span></div>
       <div class="card-chips" id="viewerChips" style="position:static;max-width:none;"></div>
+      <div class="ai-viewer" id="viewerAi" hidden></div>
       <h2 class="viewer-name" id="viewerName"></h2>
       <p class="viewer-meta" id="viewerMeta"></p>
       <p class="lowtex-note" id="lowtexNote" hidden>这张照片纹理很少，合焦程度难以自动判断。已归入临界，建议人工确认，不要直接删除。</p>
@@ -1132,6 +1150,7 @@ select option { background: #14171a; color: var(--text); }
 <div class="drop-overlay" id="dropOverlay" hidden><p>松开鼠标，添加照片</p></div>
 
 <script src="focus-core.js?v=1.0.1"></script>
+<script src="ai-core.js?v=0.1.0"></script>
 <script>
 (function () {
   'use strict';
@@ -1454,6 +1473,8 @@ select option { background: #14171a; color: var(--text); }
       lowTexture: !!photo.lowTexture,
       fullSaved: !!photo.fullSaved,
       analysis: photo.analysis,
+      ai: photo.ai || null,
+      aiError: photo.aiError || '',
       time: photo.time
     };
   }
@@ -2542,6 +2563,7 @@ select option { background: #14171a; color: var(--text); }
     renderHistogram();
     renderGrid(true);
     updateExportState();
+    syncAiPanel();
     if (state.viewerId && els.viewer.open) updateViewer();
     scheduleSave();
   }
@@ -2746,6 +2768,7 @@ select option { background: #14171a; color: var(--text); }
     info.appendChild(name);
     info.appendChild(el('span', 'card-sub', cardSub(photo)));
     card.appendChild(info);
+    if (window.AIEnhance) window.AIEnhance.decorate(info, media, photo);
     return card;
   }
 
@@ -3084,6 +3107,8 @@ select option { background: #14171a; color: var(--text); }
     if (groupMembers && groupMembers.length > 1) {
       els.viewerChips.appendChild(el('span', 'chip chip-rank', '第 ' + (photo.group + 1) + ' 组 · 组内 #' + (photo.groupRank + 1)));
     }
+
+    if (window.AIEnhance) window.AIEnhance.renderViewer(els.viewerAi, photo);
 
     els.detailTime.textContent = formatShotTime(photo, true) || '无拍摄时间';
     if (photo.analysis) {
@@ -3685,8 +3710,136 @@ select option { background: #14171a; color: var(--text); }
 
   /* ---------------- events ---------------- */
 
-  function bindEvents() {
-    els.addPhotosBtn.addEventListener('click', function () {
+  /* ---------------- AI 增强（本地服务） ---------------- */
+
+  function aiToken() {
+    return (DESKTOP && DESKTOP.token) || '';
+  }
+
+  function syncAiPanel() {
+    if (!els.aiPanelStat) return;
+    var enhanced = state.photos.filter(function (photo) { return !!photo.ai; }).length;
+    var done = state.photos.filter(function (photo) { return photo.status === 'done'; }).length;
+    els.aiPanelStat.textContent = done ? (enhanced + ' / ' + done + ' 张已增强') : '未增强';
+    els.aiStarsBtn.disabled = enhanced === 0;
+    els.aiXmpBtn.disabled = enhanced === 0;
+    var available = DESKTOP && aiToken();
+    if (els.aiBtn) els.aiBtn.hidden = !available;
+    if (els.aiRunBtn) els.aiRunBtn.hidden = !available;
+    if (els.aiPanelNote) {
+      els.aiPanelNote.hidden = !!available;
+      els.aiPanelNote.textContent = available ? '' : 'AI 增强需要桌面版：本地服务负责推理，照片不会上传。';
+    }
+  }
+
+  async function runAiEnhance() {
+    if (!window.AIEnhance || !DESKTOP || !aiToken()) {
+      toast('AI 增强只在桌面版可用');
+      return;
+    }
+    if (state.running) {
+      toast('等当前分析完成后再运行 AI 增强');
+      return;
+    }
+    var targets = state.photos.filter(function (photo) {
+      return photo.status === 'done' && window.AIEnhance.pathOf(photo);
+    });
+    if (!targets.length) {
+      toast('先导入照片并等分析完成');
+      return;
+    }
+    els.aiRunBtn.disabled = true;
+    els.aiBtn.disabled = true;
+    toast('AI 增强中：分项评分与自动标签…');
+    var result = await window.AIEnhance.run(targets, {
+      onProgress: function (done, total) {
+        els.aiPanelStat.textContent = done + ' / ' + total + ' 张';
+      }
+    });
+    els.aiRunBtn.disabled = false;
+    els.aiBtn.disabled = false;
+    if (!result.ok) {
+      syncAiPanel();
+      toast(result.error || 'AI 增强失败');
+      return;
+    }
+    markAllDirty();
+    renderAll();
+    var parts = ['已增强 ' + result.done + ' 张'];
+    if (result.failed) parts.push('失败 ' + result.failed + ' 张');
+    if (result.tags && result.tags.available === false) parts.push('自动标签不可用（' + (result.tags.reason || '') + '）');
+    toast(parts.join('，'));
+  }
+
+  function applyAiStars() {
+    if (!window.AIEnhance) return;
+    var index = {};
+    state.photos.forEach(function (photo) { index[photo.id] = photo; });
+    var result = window.AIEnhance.applySuggested(state.photos, state.groups, function (id) {
+      return index[id];
+    });
+    renderAll();
+    toast('已按建议更新 ' + result.changed + ' 张' +
+      (result.rejected ? '，其中建议废片 ' + result.rejected + ' 张' : ''));
+  }
+
+  async function exportAiXmp() {
+    if (!window.AIEnhance) return;
+    var targets = state.photos.filter(function (photo) {
+      return photo.status === 'done' && photo.ai && isRawName(photo.name);
+    });
+    if (!targets.length) {
+      toast('没有可导出的 AI 标签（XMP 侧车只对 RAW 生效）');
+      return;
+    }
+    var api = await waitDesktopApi();
+    if (!api) {
+      toast('桌面组件还在启动，请稍后再试');
+      return;
+    }
+    var items = targets.map(function (photo) {
+      var rating = photo.rating || 0;
+      return {
+        id: photo.id,
+        path: (photo.file && photo.file.__path) || '',
+        dir: desktopDir(),
+        name: photo.name,
+        rating: rating,
+        tags: (photo.ai.tags || []).map(function (tag) { return 'AI/' + tag.key; }),
+        label: rating === 0 ? 'Red' : (rating >= 4 ? 'Green' : null)
+      };
+    });
+    els.aiXmpBtn.disabled = true;
+    toast('正在写入评分与 AI 标签…');
+    var result;
+    try {
+      result = await api.write_xmp(items);
+    } catch (error) {
+      els.aiXmpBtn.disabled = false;
+      toast('写入失败：' + (error && error.message ? error.message : '未知错误'));
+      return;
+    }
+    var byId = {};
+    (result.results || []).forEach(function (row) {
+      if (row.status === 'created' || row.status === 'updated') byId[row.id] = row.rating || 0;
+    });
+    targets.forEach(function (photo) {
+      if (Object.prototype.hasOwnProperty.call(byId, photo.id)) {
+        photo.xmpRating = byId[photo.id];
+        photo.cacheDirty = true;
+      }
+    });
+    els.aiXmpBtn.disabled = false;
+    syncAiPanel();
+    updateExportState();
+    scheduleSave();
+    var parts = ['新建 ' + (result.created || 0), '更新 ' + (result.updated || 0)];
+    if (result.missing) parts.push('未找到 ' + result.missing);
+    if (result.failed) parts.push('失败 ' + result.failed);
+    toast('XMP：' + parts.join('，'));
+  }
+
+  function bindEvents() {    els.addPhotosBtn.addEventListener('click', function () {
       if (DESKTOP) { pickDesktopFiles(); return; }
       els.fileInput.click();
     });
@@ -3708,6 +3861,10 @@ select option { background: #14171a; color: var(--text); }
       if (DESKTOP) { pickDesktopFolder(); return; }
       els.dirInput.click();
     });
+    if (els.aiBtn) els.aiBtn.addEventListener('click', function () { runAiEnhance(); });
+    if (els.aiRunBtn) els.aiRunBtn.addEventListener('click', function () { runAiEnhance(); });
+    if (els.aiStarsBtn) els.aiStarsBtn.addEventListener('click', applyAiStars);
+    if (els.aiXmpBtn) els.aiXmpBtn.addEventListener('click', exportAiXmp);
 
     els.fileInput.addEventListener('change', function () {
       addFiles(els.fileInput.files);
@@ -4014,12 +4171,21 @@ select option { background: #14171a; color: var(--text); }
     els.clearCount = $('clearCount');
     els.confirmCancel = $('confirmCancel');
     els.confirmClearBtn = $('confirmClearBtn');
+    els.aiBtn = $('aiBtn');
+    els.aiRunBtn = $('aiRunBtn');
+    els.aiStarsBtn = $('aiStarsBtn');
+    els.aiXmpBtn = $('aiXmpBtn');
+    els.aiPanelStat = $('aiPanelStat');
+    els.aiPanelNote = $('aiPanelNote');
+    els.viewerAi = $('viewerAi');
     els.toast = $('toast');
     els.dropOverlay = $('dropOverlay');
   }
 
   cacheElements();
   applyDesktopCopy();
+  if (window.AIEnhance) window.AIEnhance.injectStyles();
+  syncAiPanel();
   buildViewerRating();
   bindEvents();
   restoreSession().then(function (restored) {

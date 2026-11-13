@@ -183,6 +183,10 @@ class Bridge:
         return selected[0]
 
     def write_xmp(self, items: list[dict]) -> dict:
+        try:
+            from service import xmp as xmp_service  # noqa: PLC0415
+        except Exception:  # noqa: BLE001
+            xmp_service = None
         created = updated = cleared = missing = failed = 0
         results = []
         for item in items or []:
@@ -200,27 +204,42 @@ class Bridge:
                 missing += 1
                 results.append({"id": entry_id, "name": source.name, "rating": rating, "status": "missing"})
                 continue
-            sidecar = source.with_suffix(".xmp")
-            try:
-                if sidecar.exists():
-                    text = sidecar.read_text("utf-8", errors="replace")
-                    merged = merge_xmp_rating(text, rating)
-                    if merged is None:
-                        failed += 1
-                        results.append({"id": entry_id, "name": source.name, "rating": rating, "status": "failed"})
-                        continue
-                    sidecar.write_text(merged, encoding="utf-8")
-                    updated += 1
-                    status = "updated"
-                else:
-                    sidecar.write_text(build_xmp(rating), encoding="utf-8")
-                    created += 1
-                    status = "created"
-            except OSError:
+
+            status = ""
+            if xmp_service is not None:
+                row = xmp_service.write_sidecar(
+                    source,
+                    rating,
+                    [str(tag) for tag in (item.get("tags") or [])],
+                    item.get("label"),
+                )
+                status = row.get("status") or "failed"
+            else:
+                sidecar = source.with_suffix(".xmp")
+                try:
+                    if sidecar.exists():
+                        text = sidecar.read_text("utf-8", errors="replace")
+                        merged = merge_xmp_rating(text, rating)
+                        if merged is None:
+                            status = "failed"
+                        else:
+                            sidecar.write_text(merged, encoding="utf-8")
+                            status = "updated"
+                    else:
+                        sidecar.write_text(build_xmp(rating), encoding="utf-8")
+                        status = "created"
+                except OSError:
+                    status = "failed"
+
+            if status == "created":
+                created += 1
+            elif status == "updated":
+                updated += 1
+            elif status == "failed":
                 failed += 1
-                results.append({"id": entry_id, "name": source.name, "rating": rating, "status": "failed"})
-                continue
-            if rating == 0:
+            else:
+                missing += 1
+            if status in {"created", "updated"} and rating == 0:
                 cleared += 1
             results.append({"id": entry_id, "name": source.name, "rating": rating, "status": status})
         return {
@@ -253,8 +272,21 @@ class Bridge:
         return {"ok": True, "path": str(path)}
 
 
+ANALYZE_LOCK = threading.Lock()
+
+
+def load_service():
+    """延迟导入分析服务；缺依赖时返回 (None, 原因)，不影响界面启动。"""
+    try:
+        from service import pipeline  # noqa: PLC0415
+
+        return pipeline, ""
+    except Exception as error:  # noqa: BLE001
+        return None, f"{error.__class__.__name__}: {error}"
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "PhotoCull/1.1"
+    server_version = "PhotoCull/1.2"
 
     def log_message(self, *args) -> None:  # 保持终端安静
         pass
@@ -294,10 +326,107 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/file":
                 self._send_file(query)
                 return
+            if parsed.path == "/api/ai/status":
+                pipeline, reason = load_service()
+                if pipeline is None:
+                    self._json({"ok": False, "error": "分析服务不可用", "reason": reason})
+                    return
+                try:
+                    self._json(pipeline.status())
+                except Exception as error:  # noqa: BLE001
+                    self._json({"ok": False, "error": str(error)}, 500)
+                return
             self._json({"error": "not found"}, 404)
             return
 
         self._send_static(parsed.path)
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        if not self._authorized(query):
+            self._json({"error": "forbidden"}, 403)
+            return
+        if not parsed.path.startswith("/api/"):
+            self._json({"error": "not found"}, 404)
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            length = 0
+        if length <= 0 or length > 64 * 1024 * 1024:
+            self._json({"error": "请求体无效"}, 400)
+            return
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            self._json({"error": "JSON 解析失败"}, 400)
+            return
+        if not isinstance(payload, dict):
+            self._json({"error": "JSON 结构无效"}, 400)
+            return
+
+        if parsed.path == "/api/ai/analyze":
+            self._analyze(payload)
+            return
+        if parsed.path == "/api/xmp/write":
+            self._write_xmp(payload)
+            return
+        self._json({"error": "not found"}, 404)
+
+    def _analyze(self, payload: dict) -> None:
+        pipeline, reason = load_service()
+        if pipeline is None:
+            self._json({"ok": False, "error": "分析服务不可用", "reason": reason}, 503)
+            return
+        items = payload.get("items") or []
+        if not isinstance(items, list) or not items:
+            self._json({"ok": False, "error": "没有待分析的照片"}, 400)
+            return
+        clean = [
+            {"id": str(item.get("id") or ""), "path": str(item.get("path") or "")}
+            for item in items[:500]
+            if isinstance(item, dict) and item.get("path")
+        ]
+        try:
+            with ANALYZE_LOCK:
+                result = pipeline.analyze(
+                    clean,
+                    want_tags=bool(payload.get("tags", True)),
+                    force=bool(payload.get("force", False)),
+                )
+        except Exception as error:  # noqa: BLE001
+            self._json({"ok": False, "error": str(error)}, 500)
+            return
+        self._json(result)
+
+    def _write_xmp(self, payload: dict) -> None:
+        try:
+            from service import xmp as xmp_service  # noqa: PLC0415
+        except Exception as error:  # noqa: BLE001
+            self._json({"ok": False, "error": str(error)}, 503)
+            return
+        items = payload.get("items") or []
+        if not isinstance(items, list):
+            self._json({"ok": False, "error": "items 无效"}, 400)
+            return
+        results = []
+        for item in items[:2000]:
+            if not isinstance(item, dict):
+                continue
+            results.append(
+                xmp_service.write_sidecar(
+                    item.get("path") or "",
+                    item.get("rating") or 0,
+                    item.get("tags") or [],
+                    item.get("label"),
+                    backup=bool(payload.get("backup", True)),
+                )
+            )
+        counts = {}
+        for row in results:
+            counts[row["status"]] = counts.get(row["status"], 0) + 1
+        self._json({"ok": True, "counts": counts, "results": results})
 
     def _send_static(self, path: str) -> None:
         relative = unquote(path).lstrip("/") or "index.html"

@@ -1,0 +1,9 @@
+{
+  "weights": {
+    "focus": 45,
+    "motion": 15,
+    "exposure": 15,
+    "noise": 10,
+    "subject": 15
+  }
+}
