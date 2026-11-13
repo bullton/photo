@@ -13,7 +13,7 @@ import threading
 DEFAULT_MODEL = "openai/clip-vit-base-patch32"
 
 # 改标签或提示词后递增，用来让旧的分析缓存失效。
-LABELS_VERSION = 3
+LABELS_VERSION = 4
 
 LABELS: dict[str, dict] = {
     "bird": {"zh": "鸟类", "prompts": ["a photo of a bird", "a close-up photo of a bird in the wild", "a bird in flight"]},
@@ -49,7 +49,12 @@ LABELS: dict[str, dict] = {
     "portrait": {"zh": "人像", "prompts": ["a portrait photo of a person", "a close-up portrait of a face"]},
     "family": {"zh": "家庭", "prompts": ["a family photo of people together", "a candid photo of people at home"]},
     "street": {"zh": "街拍", "prompts": ["a street photography photo of people in a city", "a candid street scene"]},
-    "macro": {"zh": "微距", "prompts": ["an extreme close-up macro photo of a small subject", "a macro photo of an insect"]},
+    "macro": {"zh": "微距", "prompts": [
+        "a macro photo of an insect or spider",
+        "a close-up photo of a spider on a wall",
+        "a macro shot of a small bug",
+        "an extreme close-up photo of a tiny subject",
+    ]},
     "flower": {"zh": "花卉", "prompts": ["a close-up photo of a flower", "a photo of blooming flowers"]},
     "architecture": {"zh": "建筑", "prompts": [
         "a photo of a building exterior",
