@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from service import metrics, scoring, xmp  # noqa: E402
+from service import clip_tagger, metrics, scoring, xmp  # noqa: E402
 from service.exif_tool import _normalize_box, mode_label  # noqa: E402
 
 
@@ -210,6 +210,25 @@ class ExifToolTest(unittest.TestCase):
         self.assertEqual(mode_label("Wide (L)"), "area")
         self.assertEqual(mode_label(193), "")
         self.assertEqual(mode_label(""), "")
+
+
+class ClipLabelsTest(unittest.TestCase):
+    def test_labels_are_complete(self):
+        labels = clip_tagger.LABELS
+        self.assertGreaterEqual(len(labels), 15)
+        for key, value in labels.items():
+            self.assertTrue(value["zh"], key)
+            self.assertTrue(value["prompts"], key)
+            self.assertTrue(all(isinstance(prompt, str) and prompt for prompt in value["prompts"]))
+
+    def test_ship_categories_exist(self):
+        for key in ("warship", "ship", "boat", "aircraft", "vehicle"):
+            self.assertIn(key, clip_tagger.LABELS)
+        self.assertIn("other", clip_tagger.LABELS)
+
+    def test_version_bumps_with_labels(self):
+        self.assertIsInstance(clip_tagger.LABELS_VERSION, int)
+        self.assertGreaterEqual(clip_tagger.LABELS_VERSION, 2)
 
 
 if __name__ == "__main__":

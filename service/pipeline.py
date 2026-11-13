@@ -67,7 +67,12 @@ def analyze(items: list[dict], want_tags: bool = True, force: bool = False) -> d
 
         meta = exif_tool.lookup(metas, raw_path)
         cached = None if force else store.get(raw_path, stat.st_size, stat.st_mtime)
-        if cached and (not want_tags or cached.get("tags") is not None):
+        cache_ok = cached and (
+            not want_tags
+            or (cached.get("tags") is not None
+                and cached.get("tags_version") == clip_tagger.LABELS_VERSION)
+        )
+        if cache_ok:
             results.append({"id": entry_id, "ok": True, "cached": True, **cached})
             continue
 
@@ -90,6 +95,7 @@ def analyze(items: list[dict], want_tags: bool = True, force: bool = False) -> d
             "metrics": _compact(measured),
             "score": scored,
             "tags": tags,
+            "tags_version": clip_tagger.LABELS_VERSION if tags is not None else None,
             "exif": {
                 key: meta[key]
                 for key in ("Model", "LensModel", "ISO", "FNumber", "ExposureTime",
@@ -122,7 +128,7 @@ def status() -> dict:
         "ok": True,
         "version": VERSION,
         "exiftool": exif_tool.available(),
-        "clip": clip_tagger.status(),
+        "clip": {**clip_tagger.status(), "labels_version": clip_tagger.LABELS_VERSION},
         "library": library.get_library().stats(),
         "weights": scoring.normalize_weights(scoring.DEFAULT_WEIGHTS),
     }

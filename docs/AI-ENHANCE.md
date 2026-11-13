@@ -100,8 +100,18 @@ composite = Σ(part_i × weight_i)     # 默认 45/15/15/10/15，见 config/scor
 - 低纹理画面（`texture_ratio < 0.15`）只标 `border`，不判虚焦，宁可让人眼复核。
 - 组内相对排序仍然保留：`applySuggested` 会给每组综合分最高的一张补一星，
   且不覆盖用户手动改过的星级（`starTouched`）。
-- 自动标签是零样本 CLIP（ViT-B/32），只能给出“鸟类 / 野生动物 / 风光”这类
-  大类，给不出鸟种。实测鸟类照片 `bird` 置信度 0.50–0.57，标签是提示，不是结论。
+- 自动标签是零样本 CLIP（ViT-B/32），只能给出大类（鸟类 / 军舰 / 船只 / 飞机 /
+  野生动物…），给不出鸟种或舰级。实测：
+  - 鸟类照片 `bird` 0.98–0.99；
+  - 南宁舰（052D）`warship` 0.99–1.00，同批军港照片全部命中；
+  - 货轮 → `ship`，帆船 → `boat`，客机 → `aircraft`，跑车 → `vehicle`；
+  - 3D 渲染壁纸会落入拒识类 `other`，不输出标签。
+- 标签用「每类提示词向量取平均后再 softmax」，避免单条措辞过度自信；
+  `other` 只参与拒识、不写成 `AI/other`。改标签或提示词后递增
+  `LABELS_VERSION`，旧缓存会自动失效重算。
+- 兼容性：transformers 5 的 `get_text_features` / `get_image_features` 返回
+  **未投影**的模型输出，直接点积会让图文空间错位（表现为“航母 → 家庭”）。
+  这里显式走 `text_model → text_projection` 与 `vision_model → visual_projection`。
 
 ## 接口
 

@@ -12,10 +12,18 @@ import threading
 
 DEFAULT_MODEL = "openai/clip-vit-base-patch32"
 
+# 改标签或提示词后递增，用来让旧的分析缓存失效。
+LABELS_VERSION = 2
+
 LABELS: dict[str, dict] = {
     "bird": {"zh": "鸟类", "prompts": ["a photo of a bird", "a close-up photo of a bird in the wild", "a bird in flight"]},
     "wildlife": {"zh": "野生动物", "prompts": ["a photo of a wild animal", "a wildlife photo of an animal in nature"]},
     "pet": {"zh": "宠物", "prompts": ["a photo of a pet cat or dog", "a portrait of a pet"]},
+    "warship": {"zh": "军舰", "prompts": ["a photo of a navy warship at sea", "a photo of a military ship with guns and radar", "a photo of a destroyer or frigate"]},
+    "ship": {"zh": "船只", "prompts": ["a photo of a large ship at sea", "a photo of a cargo ship or cruise liner", "a photo of a ferry on the water"]},
+    "boat": {"zh": "小船", "prompts": ["a photo of a small boat", "a photo of a sailboat on the water", "a photo of a fishing boat"]},
+    "aircraft": {"zh": "飞机", "prompts": ["a photo of an airplane", "a photo of an airliner on the runway", "a photo of a fighter jet in the sky"]},
+    "vehicle": {"zh": "车辆", "prompts": ["a photo of a car", "a photo of a sports car", "a photo of a motorcycle", "a photo of a truck or bus on the road"]},
     "landscape": {"zh": "风光", "prompts": ["a landscape photo", "a wide scenic view of nature"]},
     "astrophotography": {"zh": "星空", "prompts": ["an astrophotography photo of the milky way and stars", "a night sky full of stars"]},
     "night_scene": {"zh": "夜景", "prompts": ["a night photo of a city or building", "a low light scene at night"]},
@@ -25,9 +33,9 @@ LABELS: dict[str, dict] = {
     "macro": {"zh": "微距", "prompts": ["an extreme close-up macro photo of a small subject", "a macro photo of an insect"]},
     "flower": {"zh": "花卉", "prompts": ["a close-up photo of a flower", "a photo of blooming flowers"]},
     "architecture": {"zh": "建筑", "prompts": ["an architecture photo of a building", "a photo of an interior or building"]},
-    "vehicle": {"zh": "交通工具", "prompts": ["a photo of a car or motorcycle", "a photo of a vehicle"]},
     "food": {"zh": "食物", "prompts": ["a photo of food on a table", "a close-up photo of a dish"]},
     "document": {"zh": "文档/屏幕", "prompts": ["a photo of a document or screen", "a screenshot or scanned paper"]},
+    "other": {"zh": "其他", "prompts": ["a photo of something else", "an abstract image", "a 3d render wallpaper"]},
 }
 
 TOP_K = 3
@@ -68,15 +76,20 @@ def status() -> dict:
     }
 
 
-def _embed(output):
-    """兼容不同 transformers 版本：老版返回 Tensor，新版返回 BaseModelOutput。"""
-    if hasattr(output, "norm"):
-        return output
-    for attr in ("text_embeds", "image_embeds", "pooler_output"):
-        value = getattr(output, attr, None)
-        if value is not None:
-            return value
-    raise RuntimeError("无法从模型输出中取到 embedding")
+def _text_features(model, tokenizer_output):
+    """文本向量：pooler 后再过投影层。
+
+    transformers 5 的 CLIPModel.get_text_features() 直接返回未投影的
+    BaseModelOutputWithPooling（512 维但不是共享空间），和图像向量点积会得到
+    近乎随机的标签。这里显式走 text_model -> text_projection。
+    """
+    out = model.text_model(input_ids=tokenizer_output)
+    return model.text_projection(out.pooler_output)
+
+
+def _image_features(model, pixel_values):
+    out = model.vision_model(pixel_values=pixel_values)
+    return model.visual_projection(out.pooler_output)
 
 
 class Tagger:
@@ -137,10 +150,18 @@ class Tagger:
                 owners.append(key)
         tokens = self._processor(text=prompts, return_tensors="pt", padding=True)["input_ids"]
         with torch.inference_mode():
-            embeds = _embed(self._model.get_text_features(tokens.to(self.device)))
+            embeds = _text_features(self._model, tokens.to(self.device))
             embeds = embeds / embeds.norm(dim=-1, keepdim=True)
-        self._text = embeds.float()
-        self._owners = owners
+
+        # 先按类别平均提示词向量，再在类别之间做 softmax。直接对每条提示词做
+        # softmax 会让某一条措辞异常自信，出现“航母 → 家庭 0.81”这类结果。
+        classes = []
+        for key in LABELS:
+            rows = [index for index, owner in enumerate(owners) if owner == key]
+            center = embeds[rows].mean(dim=0)
+            classes.append(center / center.norm())
+        self._text = torch.stack(classes).float()
+        self._owners = list(LABELS.keys())
         self._torch = torch
         return True
 
@@ -163,22 +184,23 @@ class Tagger:
             torch = self._torch
             inputs = self._processor(images=image, return_tensors="pt")["pixel_values"]
             with torch.inference_mode():
-                embeds = _embed(self._model.get_image_features(inputs.to(self.device)))
+                embeds = _image_features(self._model, inputs.to(self.device))
                 embeds = embeds / embeds.norm(dim=-1, keepdim=True)
                 logits = self._model.logit_scale.exp() * (embeds.float() @ self._text.T)
                 probs = logits.softmax(dim=-1)[0]
 
-        best: dict[str, float] = {}
-        for index, owner in enumerate(self._owners):
-            value = float(probs[index])
-            if value > best.get(owner, 0.0):
-                best[owner] = value
-        ranked = sorted(best.items(), key=lambda item: item[1], reverse=True)
+        ranked = sorted(
+            ((key, float(probs[index])) for index, key in enumerate(self._owners)),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        # "other" 只作为拒识类参与 softmax，不写成 AI/other 标签：
+        # 它最大的时候说明这张图不属于任何已知类别，宁可不打标签。
         return [
             {"key": key, "zh": LABELS[key]["zh"], "p": round(prob, 3)}
-            for key, prob in ranked[:TOP_K]
-            if prob >= MIN_PROB
-        ]
+            for key, prob in ranked
+            if key != "other" and prob >= MIN_PROB
+        ][:TOP_K]
 
 
 _tagger: Tagger | None = None

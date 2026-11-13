@@ -493,6 +493,13 @@ PORT_FILE = app_data_dir() / "port"
 PORT_CANDIDATES = (47653, 47654, 47655, 47656, 47657, 47658, 47659, 47660)
 
 
+class LocalServer(ThreadingHTTPServer):
+    # Windows 上 allow_reuse_address=True 会允许两个进程绑定同一端口，
+    # 后启动的实例“抢走”连接却用错 token，表现为界面一直转圈。
+    allow_reuse_address = False
+    daemon_threads = True
+
+
 def serve(port: int | None = None) -> ThreadingHTTPServer:
     """优先使用固定端口，让 WebView 的 IndexedDB 在重启后仍属于同一来源。"""
     candidates: list[int] = []
@@ -510,12 +517,12 @@ def serve(port: int | None = None) -> ThreadingHTTPServer:
     server = None
     for candidate in candidates:
         try:
-            server = ThreadingHTTPServer(("127.0.0.1", candidate), Handler)
+            server = LocalServer(("127.0.0.1", candidate), Handler)
             break
         except OSError:
             continue
     if server is None:
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server = LocalServer(("127.0.0.1", 0), Handler)
     try:
         PORT_FILE.write_text(str(server.server_address[1]), encoding="utf-8")
     except OSError:
