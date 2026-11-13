@@ -24,7 +24,9 @@
 ### 对焦 `focus`
 
 - 块内梯度幅值均值 ÷ 块内亮度标准差 = **反差归一化斜率**，抵消“越亮越花”的偏差；
-- 只在标准差 ≥ 6（有纹理）的块上统计，取 **P75**，避免大面积天空拉低分数；
+- 只在标准差 ≥ 6（有纹理）的块上统计；`focus_slope = 0.6 × P75 + 0.4 × P90`。
+  P75 代表整体细节，P90 代表最锐的那部分边缘（眼睛、喙、叶脉）；只用 P75 会把
+  羽毛平滑的实焦主体误判成偏软，只用 P90 又容易被背景高反差细节带偏；
 - 0–100 用对数比值映射：`log(slope / 0.10) / log(0.60 / 0.10)`。
   低端（0.10–0.20）拉开差距，高端不会早早饱和。
 
@@ -67,9 +69,9 @@ composite = Σ(part_i × weight_i)     # 默认 45/15/15/10/15，见 config/scor
 
 | 判定 | 条件 | 星级 |
 | --- | --- | --- |
-| `blur` | focus < 22 | 综合 ≥ 55 给 1 星，否则 0 星 |
-| `border` | focus < 45，或纹理占比 < 0.15（无法判断） | 1–3 星 |
-| `sharp` | focus ≥ 45 | 2–5 星（62/74/86 分档） |
+| `blur` | focus < 30 | 综合 ≥ 55 给 1 星，否则 0 星 |
+| `border` | focus < 50，或纹理占比 < 0.15（无法判断） | 1–3 星 |
+| `sharp` | focus ≥ 50 | 2–5 星（72/82/90 分档） |
 
 综合分是 0–100 的加权和，UI 里会逐项显示，改权重即可实时重排。
 `AI/` 前缀标签只增删自己写的条目，`xmp:Rating` 只写星级，其余 XMP 节点原样保留。
@@ -78,14 +80,28 @@ composite = Σ(part_i × weight_i)     # 默认 45/15/15/10/15，见 config/scor
 
 - **绝对分数是近似值**：预览是相机直出 JPEG，机内锐化已经烘焙，无法还原传感器
   真实对焦精度。分数更适合同一机身、同一组连拍的相对比较。
-- `SLOPE_LO=0.10`、`SLOPE_HI=0.60`、`focus` 判定阈值 45/22 是用一组风光样片
-  粗标的。换机身、换锐化档位、常拍低细节题材（雾、剪影、纯色天空）时应重新标定：
-  拍同一场景的实焦 / 手动虚焦两版，记录 `slope` 与 `focus_norm`，再调常量。
+- 当前常量（`SLOPE_LO=0.10`、`SLOPE_HI=0.60`、判定阈值 50/30）在 Nikon Z 30 +
+  50–250mm 的鸟类样片上验证过：
+
+  | 样本 | 原图 focus | 2px 模糊 | 判定 |
+  | --- | --- | --- | --- |
+  | 近距离翠鸟（细节多） | 100 | 54 | 原图 sharp，2px 起 border |
+  | 冠鸠（羽毛平滑） | 67 | 32 | 原图 sharp，2px border |
+  | 中等距离鸣禽 ×2 | 85–90 | 45 | 原图 sharp，2px border |
+
+- 换机身、换锐化档位、常拍低细节题材（雾、剪影、纯色天空）时应重新标定：
+
+  ```bash
+  python tools/calibrate.py "D:\Photos\2026-07-04" --limit 40 --blur
+  ```
+
+  工具会打印每张的 P75/P90/混合斜率、focus 分与判定，并用 2px 模糊做负样本，
+  给出 `SLOPE_LO` / `SLOPE_HI` 的建议值；分离度低于 2× 时不要硬调。
 - 低纹理画面（`texture_ratio < 0.15`）只标 `border`，不判虚焦，宁可让人眼复核。
 - 组内相对排序仍然保留：`applySuggested` 会给每组综合分最高的一张补一星，
   且不覆盖用户手动改过的星级（`starTouched`）。
 - 自动标签是零样本 CLIP（ViT-B/32），只能给出“鸟类 / 野生动物 / 风光”这类
-  大类，给不出鸟种。标签是提示，不是结论。
+  大类，给不出鸟种。实测鸟类照片 `bird` 置信度 0.50–0.57，标签是提示，不是结论。
 
 ## 接口
 
@@ -107,20 +123,29 @@ composite = Σ(part_i × weight_i)     # 默认 45/15/15/10/15，见 config/scor
 | `PHOTOPLUS_CLIP_MODEL` | `openai/clip-vit-base-patch32` | 换 CLIP 权重 |
 | `PHOTOPLUS_CLIP_ALLOW_DOWNLOAD` | 未设置 | 设为 `1` 才允许联网下载权重 |
 
-ExifTool 为可选项（用于 ISO、机身、对焦框）。检测不到就少这些字段，不影响评分。
+ExifTool 为可选项（用于 ISO、机身、对焦框）。程序会按以下顺序查找：
+`PATH` → 环境变量 `PHOTOPLUS_EXIFTOOL` → 常见安装位置
+（`%LOCALAPPDATA%\Programs\ExifTool\ExifTool.exe`、`C:\Program Files\ExifTool`、
+`/usr/local/bin/exiftool`、`/opt/homebrew/bin/exiftool`）。
+检测不到就少这些字段，不影响评分。Nikon Z 30 实测能读到 ISO / 机身 / 镜头，
+但机内不写 `FocusLocation`，因此仍退回中心区。
 
 ## 性能
 
-- 纯 CPU 评分：1600px 预览约 0.4–0.6 s/张（4 张样片实测 ~2 s）；
+- 纯 CPU 评分：1600px 预览约 0.4–0.6 s/张；
 - 命中 SQLite 缓存后约 2 ms/张，缓存键为路径 + 大小 + mtime；
-- CLIP 标签在 4GB 显存的 RTX 3050 上用 fp16 串行跑，一次一张，显存峰值约 2 GB；
-  没有 GPU 时退回 CPU，速度明显变慢但可用。
+- 叠加 CPU 版 CLIP 标签：实测 Nikon Z 30 NEF 8 张共 23 s（约 2.9 s/张，
+  模型加载首次约 8 s，之后每张 0.06 s 推理）；
+- CLIP 有可用的 NVIDIA GPU 时自动用 fp16（约 2 GB 显存）；
+  NVML 初始化失败（驱动 / 虚拟化限制）会退回 CPU，速度慢但功能完整。
 
 ## 测试
 
 ```bash
 python -m unittest discover -s tests -v
+node tests/focus.test.cjs
 ```
 
-只覆盖纯 CPU 部分（指标、打分、XMP 合并），不需要 torch 或 node。
-原版的 `tests/focus.test.cjs` 仍需要 node 才能运行。
+Python 侧 18 项（指标、打分、XMP 合并、EXIF 辅助），不需要 torch；
+node 侧是原版 focus-core 回归。前端可用 `python app.py --smoke` 做无窗口冒烟：
+会检查页面、AI 面板、`window.AIEnhance`，并从界面内请求一次 `/api/ai/status`。

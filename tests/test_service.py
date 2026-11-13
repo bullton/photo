@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from service import metrics, scoring, xmp  # noqa: E402
+from service.exif_tool import _normalize_box, mode_label  # noqa: E402
 
 
 def textured_image(size: int = 512, period: float = 9.0, seed: int = 7) -> Image.Image:
@@ -186,6 +187,29 @@ class XmpTest(unittest.TestCase):
         result = xmp.write_sidecar(self.image, 4, ["bird"])
         self.assertEqual(result["status"], "failed")
         self.assertEqual(self.sidecar().read_text("utf-8"), broken)
+
+
+class ExifToolTest(unittest.TestCase):
+    def test_focus_location_becomes_normalized_box(self):
+        meta = {"FocusLocation": "2800 1800 200 200", "ImageWidth": 5600, "ImageHeight": 3728}
+        box = _normalize_box(meta)
+        self.assertIsNotNone(box)
+        left, top, right, bottom = box
+        self.assertAlmostEqual((left + right) / 2, 0.518, places=2)
+        self.assertAlmostEqual((top + bottom) / 2, 0.510, places=2)
+        self.assertLess(left, right)
+        self.assertLess(top, bottom)
+
+    def test_focus_location_rejects_incomplete_data(self):
+        self.assertIsNone(_normalize_box({"FocusLocation": "10 20"}))
+        self.assertIsNone(_normalize_box({"FocusLocation": "1 2 3 4"}))
+        self.assertIsNone(_normalize_box({"FocusLocation": "99999 2 3 4", "ImageWidth": 100, "ImageHeight": 100}))
+
+    def test_af_area_mode_labels(self):
+        self.assertEqual(mode_label("Single Point"), "single")
+        self.assertEqual(mode_label("Wide (L)"), "area")
+        self.assertEqual(mode_label(193), "")
+        self.assertEqual(mode_label(""), "")
 
 
 if __name__ == "__main__":

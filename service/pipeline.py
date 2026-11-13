@@ -19,6 +19,7 @@ def _compact(metrics_result: dict) -> dict:
         "slope_primary": round(float(metrics_result["slope_primary"]), 4),
         "slope_half": round(float(metrics_result["slope_half"]), 4),
         "slope_p50": round(float(metrics_result["slope_p50"]), 4),
+        "slope_p90": round(float(metrics_result.get("slope_p90", 0.0)), 4),
         "slope_all_p50": round(float(metrics_result["slope_all_p50"]), 4),
         "texture_ratio": round(float(metrics_result["texture_ratio"]), 4),
         "directional_ratio": round(float(metrics_result["directional_ratio"]), 4),

@@ -64,6 +64,7 @@ python -m unittest discover -s tests -v
 - `ai-core.js` — AI 增强前端接线（调用本地服务、渲染分项、应用建议星级）
 - `service/` — 本地分析服务：预览提取、指标、打分、CLIP 标签、XMP、缓存
 - `config/scoring.json` — 综合分权重
+- `tools/calibrate.py` — 用你自己的照片标定对焦阈值（可选）
 - `docs/AI-ENHANCE.md` — AI 增强的指标定义、标定方法与已知边界
 - `app.py` — pywebview 桌面壳（本地 HTTP 服务、文件选择、XMP / CSV 写入）
 - `assets/` — 应用图标源文件（SVG / PNG / ICNS）
@@ -75,3 +76,4 @@ python -m unittest discover -s tests -v
 - 星级写入 XMP 仅对 RAW 生效：已有 XMP 只更新 Rating，不覆盖其他字段；从未评分的照片不会生成 XMP。
 - 相对清晰度只适合同一批次内比较。
 - AI 分数基于相机内嵌预览计算，绝对分数是近似值；换机身或机内锐化档位后应重新标定阈值（见 `docs/AI-ENHANCE.md`）。
+- 装 ExifTool（可选）可补 ISO / 机身 / 对焦框：程序会自动查找 `PATH` 与常见安装目录，也可用 `PHOTOPLUS_EXIFTOOL` 指定路径。

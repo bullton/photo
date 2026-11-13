@@ -6,6 +6,7 @@ ExifTool 不存在时所有调用返回空结果，不影响评分主链路。
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,7 +30,25 @@ FIELDS = (
 
 
 def which() -> str | None:
-    return shutil.which("exiftool") or shutil.which("exiftool.exe")
+    for name in ("exiftool", "exiftool.exe", "ExifTool.exe"):
+        found = shutil.which(name)
+        if found:
+            return found
+    override = os.environ.get("PHOTOPLUS_EXIFTOOL")
+    if override and Path(override).is_file():
+        return override
+    # 便携版常见安装位置，避免要求用户改 PATH。
+    local = os.environ.get("LOCALAPPDATA") or ""
+    for candidate in (
+        Path(local) / "Programs" / "ExifTool" / "ExifTool.exe" if local else None,
+        Path(local) / "Programs" / "exiftool" / "exiftool.exe" if local else None,
+        Path(r"C:\Program Files\ExifTool\exiftool.exe"),
+        Path("/usr/local/bin/exiftool"),
+        Path("/opt/homebrew/bin/exiftool"),
+    ):
+        if candidate and candidate.is_file():
+            return str(candidate)
+    return None
 
 
 def available() -> bool:
@@ -37,8 +56,9 @@ def available() -> bool:
 
 
 def mode_label(value) -> str:
-    text = str(value or "").lower()
-    if not text:
+    text = str(value or "").strip().lower()
+    if not text or text.isdigit():
+        # 用 -n 读取时 Nikon 的 AFAreaMode 是数字枚举，没有可读含义。
         return ""
     if "area" in text or "wide" in text or "auto" in text or "track" in text:
         return "area"

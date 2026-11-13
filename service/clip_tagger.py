@@ -68,6 +68,17 @@ def status() -> dict:
     }
 
 
+def _embed(output):
+    """兼容不同 transformers 版本：老版返回 Tensor，新版返回 BaseModelOutput。"""
+    if hasattr(output, "norm"):
+        return output
+    for attr in ("text_embeds", "image_embeds", "pooler_output"):
+        value = getattr(output, attr, None)
+        if value is not None:
+            return value
+    raise RuntimeError("无法从模型输出中取到 embedding")
+
+
 class Tagger:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -122,7 +133,7 @@ class Tagger:
                 owners.append(key)
         tokens = self._processor(text=prompts, return_tensors="pt", padding=True)["input_ids"]
         with torch.inference_mode():
-            embeds = self._model.get_text_features(tokens.to(self.device))
+            embeds = _embed(self._model.get_text_features(tokens.to(self.device)))
             embeds = embeds / embeds.norm(dim=-1, keepdim=True)
         self._text = embeds.float()
         self._owners = owners
@@ -137,7 +148,7 @@ class Tagger:
             torch = self._torch
             inputs = self._processor(images=image, return_tensors="pt")["pixel_values"]
             with torch.inference_mode():
-                embeds = self._model.get_image_features(inputs.to(self.device))
+                embeds = _embed(self._model.get_image_features(inputs.to(self.device)))
                 embeds = embeds / embeds.norm(dim=-1, keepdim=True)
                 logits = self._model.logit_scale.exp() * (embeds.float() @ self._text.T)
                 probs = logits.softmax(dim=-1)[0]

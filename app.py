@@ -553,6 +553,12 @@ def main() -> None:
             info = window.evaluate_js(
                 "JSON.stringify({href: location.href, title: document.title, "
                 "btn: !!document.getElementById('addFolderBtn'), "
+                "aiBtn: !!document.getElementById('aiRunBtn'), "
+                "aiPanel: !!document.getElementById('aiPanelStat'), "
+                "aiCore: typeof window.AIEnhance, "
+                "aiPing: (function(){try{var x=new XMLHttpRequest();"
+                "x.open('GET','/api/ai/status?token='+(new URLSearchParams(location.search).get('token')||''),false);"
+                "x.send();return x.status+':'+x.responseText.slice(0,60);}catch(e){return 'ERR';}})(), "
                 "text: (document.body.innerText || '').slice(0, 80)})"
             )
             print("SMOKE_INFO", info, flush=True)

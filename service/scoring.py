@@ -18,8 +18,8 @@ DEFAULT_WEIGHTS = {
     "subject": 15,
 }
 
-VERDICT_SHARP = 45.0
-VERDICT_BORDER = 22.0
+VERDICT_SHARP = 50.0
+VERDICT_BORDER = 30.0
 
 LOW_DETAIL = 0.15  # 纹理占比低于此值时不下“虚焦”结论，只标待定
 
@@ -114,11 +114,11 @@ def star_for(composite: float, verdict: str) -> int:
         if composite >= 62:
             return 3
         return 2 if composite >= 48 else 1
-    if composite >= 86:
+    if composite >= 90:
         return 5
-    if composite >= 74:
+    if composite >= 82:
         return 4
-    if composite >= 62:
+    if composite >= 72:
         return 3
     return 2
 

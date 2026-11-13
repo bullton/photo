@@ -122,6 +122,7 @@ def _normalized_slope(luma: np.ndarray, block: int = BLOCK) -> dict:
     # 主体区纹理占比：背景虚化不会计入。
     return {
         "slope_p75": _percentile(values, 75),
+        "slope_p90": _percentile(values, 90),
         "slope_p50": _percentile(values, 50),
         "slope_max": float(values.max()) if values.size else 0.0,
         "slope_all_p50": _percentile(flat, 50),
@@ -231,7 +232,10 @@ def analyze_luma(luma: np.ndarray, box: tuple[float, float, float, float] | None
     half = luma[::2, ::2]
     secondary = _normalized_slope(half)
 
-    focus_slope = primary["slope_p75"]
+    # P75 代表整体细节，P90 代表“最锐的那部分边缘”（眼镜、喙、叶脉）。
+    # 只用 P75 会把羽毛平滑的实焦主体误判成偏软；只用 P90 又容易被背景里的
+    # 高反差细节带偏，所以按 6:4 混合。
+    focus_slope = 0.6 * primary["slope_p75"] + 0.4 * primary["slope_p90"]
     exposure = _exposure(luma)
     noise = _noise(luma, primary["block_std"] >= LOW_TEXTURE_STD)
     subject = _subject_stats(primary, box or CENTER_BOX)
@@ -247,8 +251,10 @@ def analyze_luma(luma: np.ndarray, box: tuple[float, float, float, float] | None
     return {
         "slope": focus_slope,
         "slope_primary": primary["slope_p75"],
+        "slope_p75": primary["slope_p75"],
         "slope_half": secondary["slope_p75"],
         "slope_p50": primary["slope_p50"],
+        "slope_p90": primary["slope_p90"],
         "slope_all_p50": primary["slope_all_p50"],
         "focus_norm": focus_norm,
         "texture_ratio": primary["texture_ratio"],
