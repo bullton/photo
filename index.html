@@ -522,6 +522,7 @@ select option { background: #14171a; color: var(--text); }
 .chip-noaf { color: var(--text-faint); border-color: rgba(255, 255, 255, 0.16); }
 .chip-exposure { color: var(--blur); border-color: rgba(239, 138, 126, 0.32); }
 .chip-slow { color: var(--border-line); border-color: rgba(226, 169, 79, 0.34); }
+.chip-slow.is-smear { color: var(--blur); border-color: rgba(239, 138, 126, 0.34); }
 .chip-rank { color: var(--accent-strong); border-color: rgba(226, 169, 79, 0.26); }
 .chip-single { color: var(--text-faint); border-color: rgba(255, 255, 255, 0.1); }
 
@@ -1482,7 +1483,8 @@ select option { background: #14171a; color: var(--text); }
       time: photo.time,
       shutter: photo.shutter || 0,
       focal35: photo.focal35 || 0,
-      slowShutter: !!photo.slowShutter
+      slowShutter: !!photo.slowShutter,
+      motionSmear: !!photo.motionSmear
     };
   }
 
@@ -1598,6 +1600,10 @@ select option { background: #14171a; color: var(--text); }
         state.photos = photos;
         photos.forEach(function (photo) {
           if (!photo.slowShutter) photo.slowShutter = CORE.slowShutter(photo.shutter, photo.focal35);
+          if (photo.motionSmear == null) {
+            photo.motionSmear = CORE.motionSmear(photo.analysis ? photo.analysis.directionalRatio : null,
+              photo.shutter, photo.focal35);
+          }
         });
         state.seq = Math.max(Number(settings.seq) || 0, maxSeq);
         state.filter = settings.filter || 'all';
@@ -2003,7 +2009,8 @@ select option { background: #14171a; color: var(--text); }
   function verdictOf(photo) {
     if (photo.status === 'error') return 'error';
     if (photo.status !== 'done') return 'pending';
-    return CORE.verdictWithExif(photo.norm, state.line, photo.lowTexture, photo.shutter, photo.focal35);
+    return CORE.verdictWithExif(photo.norm, state.line, photo.lowTexture, photo.shutter, photo.focal35,
+      photo.analysis ? photo.analysis.directionalRatio : null);
   }
 
   function matchesFilter(photo) {
@@ -2368,6 +2375,7 @@ select option { background: #14171a; color: var(--text); }
     photo.color = CORE.colorGrid(data, w, h, 6);
     photo.exposure = CORE.classifyExposure(result.meanLuma, result.highlightClip, result.shadowClip);
     photo.slowShutter = CORE.slowShutter(photo.shutter, photo.focal35);
+    photo.motionSmear = CORE.motionSmear(result.directionalRatio, photo.shutter, photo.focal35);
     photo.metric = 'center';
     photo.subject = null;
     photo.subjectP75 = null;
@@ -2832,8 +2840,10 @@ select option { background: #14171a; color: var(--text); }
     container.appendChild(verdictChip(verdict));
     if (photo.lowTexture) container.appendChild(el('span', 'chip chip-lowtex', '低纹理'));
     if (photo.status === 'done' && photo.slowShutter) {
-      var slow = el('span', 'chip chip-slow', '慢门');
-      slow.title = '曝光 ' + formatShutter(photo.shutter) + ' · ' + Math.round(photo.focal35) + 'mm，手持或主体移动容易拖影，建议放大核对';
+      var slow = el('span', 'chip chip-slow' + (photo.motionSmear ? ' is-smear' : ''), photo.motionSmear ? '慢门拖影' : '慢门');
+      slow.title = photo.motionSmear
+        ? '曝光 ' + formatShutter(photo.shutter) + ' · ' + Math.round(photo.focal35) + 'mm，画面出现单方向拖影，已按临界处理'
+        : '曝光 ' + formatShutter(photo.shutter) + ' · ' + Math.round(photo.focal35) + 'mm；若为三脚架或静止主体可忽略';
       container.appendChild(slow);
     }
     if (photo.status === 'done' && photo.exposure !== 'normal') {
@@ -2855,7 +2865,11 @@ select option { background: #14171a; color: var(--text); }
     if (photo.status === 'error') return photo.name + '，无法读取';
     if (photo.status === 'pending' || !Number.isFinite(photo.norm)) return photo.name + '，正在分析';
     var text = photo.name + '，相对清晰度 ' + Math.round(photo.norm) + '，' + VERDICT_LABEL[verdict];
-    if (photo.slowShutter) text += '，慢门 ' + formatShutter(photo.shutter) + ' ' + Math.round(photo.focal35) + 'mm 可能拖影';
+    if (photo.slowShutter) {
+      text += photo.motionSmear
+        ? '，慢门拖影 ' + formatShutter(photo.shutter) + ' ' + Math.round(photo.focal35) + 'mm'
+        : '，慢门 ' + formatShutter(photo.shutter) + ' ' + Math.round(photo.focal35) + 'mm（未见拖影）';
+    }
     if (photo.rating) text += '，' + photo.rating + ' 星';
     if (photo.lowTexture) text += '，低纹理';
     if (photo.exposure !== 'normal') text += '，' + EXPOSURE_LABEL[photo.exposure];

@@ -197,8 +197,15 @@ function main() {
   assert.strictEqual(Core.slowShutter(1 / 100, 600), false);
   assert.strictEqual(Core.slowShutter(1 / 15, 50), false);
   assert.strictEqual(Core.slowShutter(0, 420), false);
-  assert.strictEqual(Core.verdictWithExif(90, 50, false, 1 / 320, 420), 'sharp');
-  assert.strictEqual(Core.verdictWithExif(90, 50, false, 1 / 15, 420), 'border');
+  // Only a real directional collapse demotes the frame; a tripod frame with
+  // slow shutter but isotropic detail keeps its verdict, and fast panning with
+  // a smeared background is not punished either.
+  assert.strictEqual(Core.motionSmear(0.06, 1 / 15, 420), true);
+  assert.strictEqual(Core.motionSmear(0.72, 1 / 15, 420), false);
+  assert.strictEqual(Core.motionSmear(0.06, 1 / 1000, 420), false);
+  assert.strictEqual(Core.verdictWithExif(90, 50, false, 1 / 320, 420, 0.7), 'sharp');
+  assert.strictEqual(Core.verdictWithExif(90, 50, false, 1 / 15, 420, 0.06), 'border');
+  assert.strictEqual(Core.verdictWithExif(90, 50, false, 1 / 15, 420, 0.72), 'sharp');
 
   const seq = Core.parseShotSequence('DSC_8715.NEF');
   assert.strictEqual(seq.prefix, 'dsc_');

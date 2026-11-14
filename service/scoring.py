@@ -22,7 +22,7 @@ VERDICT_SHARP = 50.0
 VERDICT_BORDER = 30.0
 
 # 评分逻辑变更时递增，让 SQLite 里的旧结果失效重算（不改标签也要重算分数）。
-SCORE_VERSION = 3
+SCORE_VERSION = 4
 
 LOW_DETAIL = 0.15  # 纹理占比低于此值时不下“虚焦”结论，只标待定
 
@@ -95,6 +95,7 @@ def motion_score(metrics: dict) -> float:
 
 SLOW_SHUTTER_MIN_FOCAL35 = 150.0  # 长焦以下不做慢门判断，避免误伤夜景人像
 SLOW_SHUTTER_STOPS = 3.0  # 比 1/等效焦距 再慢 3 档才算风险
+MOTION_SMEAR_RATIO = 0.25  # 四向梯度能量比低于此值 = 出现单方向拖影
 
 
 def slow_shutter(exposure_sec: float | None, focal35: float | None) -> bool:
@@ -111,6 +112,22 @@ def slow_shutter(exposure_sec: float | None, focal35: float | None) -> bool:
     if seconds <= 0.0 or focal < SLOW_SHUTTER_MIN_FOCAL35:
         return False
     return seconds >= (2.0 ** SLOW_SHUTTER_STOPS) / focal
+
+
+def motion_smear(metrics: dict, exposure_sec: float | None, focal35: float | None) -> bool:
+    """慢门 + 画面里真的出现单方向拖影，才算拍糊。
+
+    只凭快门速度会把三脚架上的静止长焦、慢速快门风光全都降级；
+    反过来只看方向能量又会被“窗帘/栏杆”这类单向线条骗到。两个条件同时成立
+    才扣分：等效焦距够长、快门慢到 3 档、且某个方向的细节能量塌陷。
+    """
+    if not slow_shutter(exposure_sec, focal35):
+        return False
+    try:
+        ratio = float(metrics.get("directional_ratio", 1.0))
+    except (TypeError, ValueError):
+        return False
+    return ratio < MOTION_SMEAR_RATIO
 
 
 def verdict_of(focus: float, texture_ratio: float) -> str:    # 主体本身细节少（剪影、雾天、纯色天空占多数）时无法判断对焦，
@@ -181,8 +198,10 @@ def score_photo(
     verdict = verdict_of(parts["focus"], float(metrics.get("texture_ratio", 0.0)))
     star = star_for(composite, verdict)
     shutter_risk = slow_shutter(exposure_sec, focal35)
-    if shutter_risk and verdict == "sharp":
-        # 全局纹理会被背景（水面、树叶）撑高，慢门拖影只能靠 EXIF 兜底。
+    smear = motion_smear(metrics, exposure_sec, focal35)
+    if smear and verdict == "sharp":
+        # 全局纹理会被背景（水面、树叶）撑高；只有同时看到单方向拖影才降级，
+        # 三脚架上的静止主体不受影响。
         verdict = "border"
         star = min(star, 2)
     scene_keys = set(scenes or ())
@@ -200,4 +219,5 @@ def score_photo(
         "star": star,
         "night": night,
         "slow_shutter": shutter_risk,
+        "motion_smear": smear,
     }

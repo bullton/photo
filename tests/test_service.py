@@ -126,6 +126,7 @@ class ScoringTest(unittest.TestCase):
             "focus_norm": 0.92,
             "motion_risk": 0.37,
             "texture_ratio": 0.99,
+            "directional_ratio": 0.06,
             "exposure": {"mean": 179.0, "highlight_clip": 0.0, "shadow_clip": 0.0},
             "noise": {"sigma": 0.6},
             "subject": {"share": 1.0},
@@ -135,8 +136,42 @@ class ScoringTest(unittest.TestCase):
         self.assertFalse(fast["slow_shutter"])
         slow = scoring.score_photo(metrics, exposure_sec=1 / 15, focal35=420)
         self.assertTrue(slow["slow_shutter"])
+        self.assertTrue(slow["motion_smear"])
         self.assertEqual(slow["verdict"], "border")
         self.assertLessEqual(slow["star"], 2)
+
+    def test_slow_shutter_on_tripod_is_not_penalised(self):
+        # 三脚架上的静止主体：快门很慢，但没有单方向拖影，保持原判定。
+        metrics = {
+            "focus_norm": 0.92,
+            "motion_risk": 0.2,
+            "texture_ratio": 0.6,
+            "directional_ratio": 0.72,
+            "exposure": {"mean": 120.0, "highlight_clip": 0.0, "shadow_clip": 0.05},
+            "noise": {"sigma": 1.0},
+            "subject": {"share": 0.5},
+        }
+        tripod = scoring.score_photo(metrics, exposure_sec=1 / 15, focal35=420)
+        self.assertTrue(tripod["slow_shutter"])
+        self.assertFalse(tripod["motion_smear"])
+        self.assertEqual(tripod["verdict"], "sharp")
+        self.assertGreaterEqual(tripod["star"], 4)
+
+    def test_panning_without_slow_shutter_is_not_penalised(self):
+        # 摇拍：背景单方向拖影，但快门很快，主体往往清晰。
+        metrics = {
+            "focus_norm": 0.9,
+            "motion_risk": 0.5,
+            "texture_ratio": 0.7,
+            "directional_ratio": 0.05,
+            "exposure": {"mean": 130.0, "highlight_clip": 0.0, "shadow_clip": 0.0},
+            "noise": {"sigma": 1.0},
+            "subject": {"share": 0.5},
+        }
+        panned = scoring.score_photo(metrics, exposure_sec=1 / 1000, focal35=420)
+        self.assertFalse(panned["slow_shutter"])
+        self.assertFalse(panned["motion_smear"])
+        self.assertEqual(panned["verdict"], "sharp")
 
     def test_night_shots_are_not_rejected(self):
         night = {

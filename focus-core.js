@@ -100,6 +100,10 @@
     const rows = Math.max(1, Math.ceil(Math.max(1, height - 2) / blockSize));
     const blockVars = new Float32Array(cols * rows);
     const blockGrads = new Float32Array(cols * rows);
+    // Four-direction gradient energy (0/45/90/135°). A motion-blurred frame
+    // loses detail along the smear axis, so one direction collapses; a sharp
+    // frame keeps all four populated.
+    const dirEnergy = [0, 0, 0, 0];
 
     for (let by = 0; by < rows; by++) {
       for (let bx = 0; bx < cols; bx++) {
@@ -123,6 +127,10 @@
             const gx = luma[c + 1] - luma[c - 1];
             const gy = luma[down + x] - luma[up + x];
             gradSum += Math.sqrt(gx * gx + gy * gy) * 0.5;
+            dirEnergy[0] += gx * gx;
+            dirEnergy[1] += (gx * gx + 2 * gx * gy + gy * gy) * 0.5;
+            dirEnergy[2] += gy * gy;
+            dirEnergy[3] += (gx * gx - 2 * gx * gy + gy * gy) * 0.5;
             n++;
           }
         }
@@ -174,6 +182,9 @@
       else if (v <= 4) shadowCount++;
     }
     const pixelCount = luma.length || 1;
+    const dirMax = Math.max(dirEnergy[0], dirEnergy[1], dirEnergy[2], dirEnergy[3]);
+    const dirMin = Math.min(dirEnergy[0], dirEnergy[1], dirEnergy[2], dirEnergy[3]);
+    const directionalRatio = dirMax > 1e-9 ? dirMin / dirMax : 1;
 
     return {
       score: Math.max(globalVar, centerVar),
@@ -185,6 +196,7 @@
       shadowClip: shadowCount / pixelCount,
       textureRatio: textureRatio,
       gradP90: gradP90,
+      directionalRatio: directionalRatio,
       lowTexture: lowTexture,
       blockSize: blockSize,
       cols: cols,
@@ -640,9 +652,17 @@
     return seconds >= 8 / focal;
   }
 
-  function verdictWithExif(norm, line, lowTexture, exposureSec, focal35) {
+  // 慢门只是“可能糊”：三脚架上的静止主体、单向线条都会骗人。只有快门慢、
+  // 且四向梯度能量里确实有一个方向塌陷（单方向拖影）时才降级。
+  function motionSmear(directionalRatio, exposureSec, focal35) {
+    var ratio = Number(directionalRatio);
+    if (!Number.isFinite(ratio)) return false;
+    return ratio < 0.25 && slowShutter(exposureSec, focal35);
+  }
+
+  function verdictWithExif(norm, line, lowTexture, exposureSec, focal35, directionalRatio) {
     var value = verdict(norm, line, lowTexture);
-    if (value === 'sharp' && slowShutter(exposureSec, focal35)) return 'border';
+    if (value === 'sharp' && motionSmear(directionalRatio, exposureSec, focal35)) return 'border';
     return value;
   }
 
@@ -669,6 +689,7 @@
     timeCluster: timeCluster,
     groupPhotos: groupPhotos,
     slowShutter: slowShutter,
+    motionSmear: motionSmear,
     verdict: verdict,
     verdictWithExif: verdictWithExif
   };
