@@ -194,15 +194,20 @@ def score_photo(
         "noise": noise_score(metrics.get("noise", {}), iso),
         "subject": subject_score(metrics.get("subject", {})),
     }
+    shutter_risk = slow_shutter(exposure_sec, focal35)
+    smear = motion_smear(metrics, exposure_sec, focal35)
+    if smear:
+        # 拖影帧的清晰度是被背景纹理撑起来的，分数本身也要降下来，
+        # 否则会出现“临界 2 星但 90 分”的自相矛盾。
+        parts["focus"] = round(parts["focus"] * 0.5, 2)
     composite = sum(parts[key] * weight_map[key] for key in weight_map)
     verdict = verdict_of(parts["focus"], float(metrics.get("texture_ratio", 0.0)))
     star = star_for(composite, verdict)
-    shutter_risk = slow_shutter(exposure_sec, focal35)
-    smear = motion_smear(metrics, exposure_sec, focal35)
-    if smear and verdict == "sharp":
+    if smear:
         # 全局纹理会被背景（水面、树叶）撑高；只有同时看到单方向拖影才降级，
-        # 三脚架上的静止主体不受影响。
-        verdict = "border"
+        # 三脚架上的静止主体不受影响。星级不允许超过 2 星。
+        if verdict == "sharp":
+            verdict = "border"
         star = min(star, 2)
     scene_keys = set(scenes or ())
     night = bool(scene_keys & NIGHT_CLASSES) or looks_like_night(metrics)

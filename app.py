@@ -15,6 +15,7 @@ import re
 import secrets
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -518,12 +519,20 @@ def serve(port: int | None = None) -> ThreadingHTTPServer:
         candidates.extend(item for item in PORT_CANDIDATES if item not in candidates)
 
     server = None
-    for candidate in candidates:
-        try:
-            server = LocalServer(("127.0.0.1", candidate), Handler)
+    for index, candidate in enumerate(candidates):
+        # 上一个实例退出时 WebView 可能还在关连接，抢不到就短暂重试，
+        # 避免端口漂移导致 IndexedDB 换了来源、会话缓存读不回来。
+        attempts = 20 if index == 0 else 1
+        for _ in range(attempts):
+            try:
+                server = LocalServer(("127.0.0.1", candidate), Handler)
+                break
+            except OSError:
+                if attempts == 1:
+                    break
+                time.sleep(0.4)
+        if server is not None:
             break
-        except OSError:
-            continue
     if server is None:
         server = LocalServer(("127.0.0.1", 0), Handler)
     try:
@@ -557,7 +566,6 @@ def main() -> None:
     bridge.attach(window)
 
     def smoke_check() -> None:
-        import time
         time.sleep(2.5)
         try:
             info = window.evaluate_js(

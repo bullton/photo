@@ -135,7 +135,10 @@ class ScoringTest(unittest.TestCase):
         scored = scoring.score_photo(metrics, exposure_sec=1 / 80, focal35=277)
         self.assertTrue(scored["motion_smear"])
         self.assertEqual(scored["verdict"], "border")
-        self.assertLessEqual(scored["star"], 2)
+        self.assertEqual(scored["star"], 2)
+        # 分数也要降下来，不能出现“临界 2 星却 55 分”。
+        self.assertAlmostEqual(scored["parts"]["focus"], 45.0, delta=1.0)
+        self.assertLess(scored["composite"], 80.0)
 
     def test_slow_shutter_caps_sharp_verdict(self):
         # 5527 那类画面：水面高频纹理把 focus 撑到 90，实际是 1/15s @420mm 拖影。
@@ -155,7 +158,8 @@ class ScoringTest(unittest.TestCase):
         self.assertTrue(slow["slow_shutter"])
         self.assertTrue(slow["motion_smear"])
         self.assertEqual(slow["verdict"], "border")
-        self.assertLessEqual(slow["star"], 2)
+        self.assertEqual(slow["star"], 2)
+        self.assertLess(slow["parts"]["focus"], fast["parts"]["focus"])
 
     def test_slow_shutter_on_tripod_is_not_penalised(self):
         # 三脚架上的静止主体：快门很慢，但没有单方向拖影，保持原判定。

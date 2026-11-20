@@ -1324,8 +1324,25 @@ select option { background: #14171a; color: var(--text); }
         if (!photo.url) photo.url = proxy.__url;
         attached++;
       });
-      if (attached) scheduleSave();
+      if (attached) {
+        scheduleSave();
+        requeueStaleAnalysis();
+      }
     } catch (error) {}
+  }
+
+  // 旧版本缓存的分析结果没有“方向能量比”，也缺快门信息；重新分析一次即可
+  // 让拖影判定和分数生效，之后结果会被写回缓存，不会每次启动都重跑。
+  function requeueStaleAnalysis() {
+    if (state.running) return;
+    var stale = state.photos.filter(function (photo) {
+      return photo.status === 'done' && photo.analysis && photo.analysis.directionalRatio == null && photo.file;
+    });
+    if (!stale.length) return;
+    stale.forEach(function (photo) { photo.status = 'pending'; });
+    toast('正在按新版算法重新分析 ' + stale.length + ' 张…');
+    renderAll();
+    runQueue();
   }
 
   var state = {
@@ -2467,7 +2484,17 @@ select option { background: #14171a; color: var(--text); }
       return Number.isFinite(photo.focusRaw) ? photo.focusRaw : photo.raw;
     });
     // 绝对刻度：单张分数不再取决于同批其他照片，导入新目录不会让旧片掉星。
-    done.forEach(function (photo, index) { photo.norm = CORE.absoluteScore(values[index]); });
+    done.forEach(function (photo, index) {
+      photo.norm = CORE.absoluteScore(values[index]);
+      photo.motionSmear = CORE.motionSmear(
+        photo.analysis && photo.analysis.directionalRatio,
+        photo.shutter,
+        photo.focal35
+      );
+      // 拖影帧的分数由背景纹理撑高，光降星级会出现“临界 2 星却 55 分”，
+      // 这里把分数一并压到临界线以下。
+      if (photo.motionSmear) photo.norm = Math.min(photo.norm, CORE.SCORE_LINE * 0.9);
+    });
 
     state.autoLine = CORE.SCORE_LINE;
     state.line = state.manualLine == null ? state.autoLine : state.manualLine;
