@@ -678,6 +678,9 @@
 
   function verdict(norm, line, lowTexture) {
     if (!Number.isFinite(norm)) return 'pending';
+    // 0–100 刻度上低于 15 分等于整幅没有可辨细节，直接判废片；
+    // 低纹理保护只对“有细节但整体偏平”的画面生效。
+    if (norm < 15) return 'blur';
     if (lowTexture) return 'border';
     if (norm >= line) return 'sharp';
     if (norm >= line * 0.78) return 'border';
@@ -705,7 +708,8 @@
 
   function verdictWithExif(norm, line, lowTexture, exposureSec, focal35, directionalRatio) {
     var value = verdict(norm, line, lowTexture);
-    if (value === 'sharp' && motionSmear(directionalRatio, exposureSec, focal35)) return 'border';
+    // 慢门 + 单方向拖影是确实拍糊了，直接判废片，不留“临界”的模糊地带。
+    if (motionSmear(directionalRatio, exposureSec, focal35)) return 'blur';
     return value;
   }
 

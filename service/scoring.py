@@ -22,7 +22,7 @@ VERDICT_SHARP = 50.0
 VERDICT_BORDER = 30.0
 
 # 评分逻辑变更时递增，让 SQLite 里的旧结果失效重算（不改标签也要重算分数）。
-SCORE_VERSION = 5
+SCORE_VERSION = 6
 
 LOW_DETAIL = 0.15  # 纹理占比低于此值时不下“虚焦”结论，只标待定
 
@@ -164,6 +164,7 @@ def star_for(composite: float, verdict: str) -> int:
 
 NIGHT_CLASSES = {"astrophotography", "night_scene"}
 NIGHT_STAR_MIN = 2
+HARD_BLUR_FOCUS = 15.0  # 低于此分没有任何可辨细节，连夜景/低纹理保护也不救
 
 
 def looks_like_night(metrics: dict) -> bool:
@@ -198,20 +199,21 @@ def score_photo(
     smear = motion_smear(metrics, exposure_sec, focal35)
     if smear:
         # 拖影帧的清晰度是被背景纹理撑起来的，分数本身也要降下来，
-        # 否则会出现“临界 2 星但 90 分”的自相矛盾。
+        # 否则会出现"临界 2 星但 90 分"的自相矛盾。
         parts["focus"] = round(parts["focus"] * 0.5, 2)
     composite = sum(parts[key] * weight_map[key] for key in weight_map)
+    # 慢门 + 单方向拖影、或整幅几乎没有细节（分��� < 15），都算"明显不合焦"，
+    # 直接判废片；这类结论不再被夜景/低纹理保护翻案。
+    dead = smear or parts["focus"] < HARD_BLUR_FOCUS
     verdict = verdict_of(parts["focus"], float(metrics.get("texture_ratio", 0.0)))
+    if dead:
+        verdict = "blur"
     star = star_for(composite, verdict)
-    if smear:
-        # 全局纹理会被背景（水面、树叶）撑高；只有同时看到单方向拖影才降级，
-        # 三脚架上的静止主体不受影响。星级不允许超过 2 星。
-        if verdict == "sharp":
-            verdict = "border"
-        star = min(star, 2)
+    if dead:
+        star = 0
     scene_keys = set(scenes or ())
     night = bool(scene_keys & NIGHT_CLASSES) or looks_like_night(metrics)
-    if night:
+    if night and not dead:
         # 宁可交给人工复核，也不要把用户最在意的星空/夜景建议成废片。
         if verdict == "blur":
             verdict = "border"

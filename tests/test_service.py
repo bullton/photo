@@ -123,7 +123,7 @@ class ScoringTest(unittest.TestCase):
 
     def test_handheld_smear_at_1_80_277mm(self):
         # DSC_6520：185mm（277mm 等效）f/8 1/80s，草地纹理把 focus 撑到 90，
-        # 但高频细节出现单方向拖影（四向比 0.26），应判临界。
+        # 但高频细节出现单方向拖影（四向比 0.26），应直接判废片。
         metrics = {
             "focus_norm": 0.9,
             "directional_ratio": 0.26,
@@ -134,9 +134,10 @@ class ScoringTest(unittest.TestCase):
         }
         scored = scoring.score_photo(metrics, exposure_sec=1 / 80, focal35=277)
         self.assertTrue(scored["motion_smear"])
-        self.assertEqual(scored["verdict"], "border")
-        self.assertEqual(scored["star"], 2)
-        # 分数也要降下来，不能出现“临界 2 星却 55 分”。
+        # 明显拖影直接判废片（0 星），不再只是"临界 2 星"。
+        self.assertEqual(scored["verdict"], "blur")
+        self.assertEqual(scored["star"], 0)
+        # 分数也要降下来，不能出现"临界 2 星却 55 分"。
         self.assertAlmostEqual(scored["parts"]["focus"], 45.0, delta=1.0)
         self.assertLess(scored["composite"], 80.0)
 
@@ -157,8 +158,8 @@ class ScoringTest(unittest.TestCase):
         slow = scoring.score_photo(metrics, exposure_sec=1 / 15, focal35=420)
         self.assertTrue(slow["slow_shutter"])
         self.assertTrue(slow["motion_smear"])
-        self.assertEqual(slow["verdict"], "border")
-        self.assertEqual(slow["star"], 2)
+        self.assertEqual(slow["verdict"], "blur")
+        self.assertEqual(slow["star"], 0)
         self.assertLess(slow["parts"]["focus"], fast["parts"]["focus"])
 
     def test_slow_shutter_on_tripod_is_not_penalised(self):
@@ -196,7 +197,7 @@ class ScoringTest(unittest.TestCase):
 
     def test_night_shots_are_not_rejected(self):
         night = {
-            "focus_norm": 0.08,
+            "focus_norm": 0.25,
             "motion_risk": 0.1,
             "texture_ratio": 0.3,
             "exposure": {"mean": 18.0, "highlight_clip": 0.0, "shadow_clip": 0.62},
@@ -208,9 +209,26 @@ class ScoringTest(unittest.TestCase):
         self.assertNotEqual(scored["verdict"], "blur")
         self.assertGreaterEqual(scored["star"], 2)
 
+    def test_detail_free_dark_frame_is_not_protected(self):
+        # 整幅几乎没有细节（focus < 15）就是拍糊/拍空，夜景保护不能翻案。
+        dead = {
+            "focus_norm": 0.05,
+            "motion_risk": 0.1,
+            "texture_ratio": 0.02,
+            "directional_ratio": 0.85,
+            "exposure": {"mean": 18.0, "highlight_clip": 0.0, "shadow_clip": 0.62},
+            "noise": {"sigma": 3.0},
+            "subject": {"share": 0.2},
+        }
+        for scenes in (None, {"astrophotography"}):
+            scored = scoring.score_photo(dead, scenes=scenes)
+            self.assertTrue(scored["night"] or scenes)
+            self.assertEqual(scored["verdict"], "blur")
+            self.assertEqual(scored["star"], 0)
+
     def test_astro_tag_protects_even_bright_frames(self):
         metrics = {
-            "focus_norm": 0.08,
+            "focus_norm": 0.25,
             "motion_risk": 0.1,
             "texture_ratio": 0.3,
             "exposure": {"mean": 120.0, "highlight_clip": 0.0, "shadow_clip": 0.1},

@@ -2491,9 +2491,9 @@ select option { background: #14171a; color: var(--text); }
         photo.shutter,
         photo.focal35
       );
-      // 拖影帧的分数由背景纹理撑高，光降星级会出现“临界 2 星却 55 分”，
-      // 这里把分数一并压到临界线以下。
-      if (photo.motionSmear) photo.norm = Math.min(photo.norm, CORE.SCORE_LINE * 0.9);
+      // 慢门拖影 = 确实拍糊，直接压进废片区（<30），卡片显示“虚焦”而不是
+      // “边界 55 分”，和 AI 面板的 0 星结论保持一致。
+      if (photo.motionSmear) photo.norm = Math.min(photo.norm, 25);
     });
 
     state.autoLine = CORE.SCORE_LINE;

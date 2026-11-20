@@ -165,7 +165,7 @@ function main() {
   assert.ok(labels[0] === 'sharp', 'sharp scene should classify as sharp');
   assert.ok(norms[2] < line, 'blurred scene must sit below the line');
   assert.ok(labels[2] !== 'sharp', 'blurred scene must never classify as sharp');
-  assert.ok(labels[4] === 'border', 'flat gradient should stay protected as border');
+  assert.ok(labels[4] === 'blur', 'detail-free frame is a hard reject, not a soft border');
 
   // Laplacian variance spans orders of magnitude in real photos: soft frames
   // sit far below the sharp cluster, so the wide ratio gap is the cluster edge.
@@ -206,9 +206,9 @@ function main() {
   assert.strictEqual(Core.motionSmear(0.72, 1 / 15, 420), false);
   assert.strictEqual(Core.motionSmear(0.06, 1 / 1000, 420), false);
   assert.strictEqual(Core.verdictWithExif(90, 50, false, 1 / 320, 420, 0.7), 'sharp');
-  assert.strictEqual(Core.verdictWithExif(90, 50, false, 1 / 15, 420, 0.06), 'border');
+  assert.strictEqual(Core.verdictWithExif(90, 50, false, 1 / 15, 420, 0.06), 'blur');
   assert.strictEqual(Core.verdictWithExif(90, 50, false, 1 / 15, 420, 0.72), 'sharp');
-  assert.strictEqual(Core.verdictWithExif(90, 50, false, 1 / 80, 277, 0.26), 'border');
+  assert.strictEqual(Core.verdictWithExif(90, 50, false, 1 / 80, 277, 0.26), 'blur');
 
   const seq = Core.parseShotSequence('DSC_8715.NEF');
   assert.strictEqual(seq.prefix, 'dsc_');
