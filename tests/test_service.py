@@ -115,10 +115,27 @@ class ScoringTest(unittest.TestCase):
     def test_slow_shutter_needs_telephoto(self):
         self.assertTrue(scoring.slow_shutter(1 / 15, 420))
         self.assertTrue(scoring.slow_shutter(1 / 40, 600))
-        self.assertFalse(scoring.slow_shutter(1 / 100, 600))
+        self.assertTrue(scoring.slow_shutter(1 / 80, 277))
+        self.assertFalse(scoring.slow_shutter(1 / 320, 600))
         self.assertFalse(scoring.slow_shutter(1 / 15, 50))
         self.assertFalse(scoring.slow_shutter(None, 420))
         self.assertFalse(scoring.slow_shutter(1 / 15, None))
+
+    def test_handheld_smear_at_1_80_277mm(self):
+        # DSC_6520：185mm（277mm 等效）f/8 1/80s，草地纹理把 focus 撑到 90，
+        # 但高频细节出现单方向拖影（四向比 0.26），应判临界。
+        metrics = {
+            "focus_norm": 0.9,
+            "directional_ratio": 0.26,
+            "texture_ratio": 0.9,
+            "exposure": {"mean": 140.0, "highlight_clip": 0.0, "shadow_clip": 0.0},
+            "noise": {"sigma": 0.8},
+            "subject": {"share": 0.96},
+        }
+        scored = scoring.score_photo(metrics, exposure_sec=1 / 80, focal35=277)
+        self.assertTrue(scored["motion_smear"])
+        self.assertEqual(scored["verdict"], "border")
+        self.assertLessEqual(scored["star"], 2)
 
     def test_slow_shutter_caps_sharp_verdict(self):
         # 5527 那类画面：水面高频纹理把 focus 撑到 90，实际是 1/15s @420mm 拖影。

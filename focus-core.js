@@ -54,6 +54,37 @@
    * The raw score is the variance of the 4-neighbour Laplacian over the whole
    * frame and the central 62% crop, whichever is higher.
    */
+  // Separable k x k mean blur (edge-clamped), used for the high-pass band that
+  // motion-blur detection runs on. Two passes keep it O(width*height).
+  function boxBlur(src, width, height, radius) {
+    const k = radius * 2 + 1;
+    const inv = 1 / k;
+    const tmp = new Float32Array(width * height);
+    const out = new Float32Array(width * height);
+    for (let y = 0; y < height; y++) {
+      const row = y * width;
+      for (let x = 0; x < width; x++) {
+        let sum = 0;
+        for (let d = -radius; d <= radius; d++) {
+          const xx = x + d < 0 ? 0 : (x + d >= width ? width - 1 : x + d);
+          sum += src[row + xx];
+        }
+        tmp[row + x] = sum * inv;
+      }
+    }
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        let sum = 0;
+        for (let d = -radius; d <= radius; d++) {
+          const yy = y + d < 0 ? 0 : (y + d >= height ? height - 1 : y + d);
+          sum += tmp[yy * width + x];
+        }
+        out[y * width + x] = sum * inv;
+      }
+    }
+    return out;
+  }
+
   function analyzeLuma(luma, width, height, options) {
     options = options || {};
     if (!width || !height || width * height !== luma.length) {
@@ -100,10 +131,6 @@
     const rows = Math.max(1, Math.ceil(Math.max(1, height - 2) / blockSize));
     const blockVars = new Float32Array(cols * rows);
     const blockGrads = new Float32Array(cols * rows);
-    // Four-direction gradient energy (0/45/90/135°). A motion-blurred frame
-    // loses detail along the smear axis, so one direction collapses; a sharp
-    // frame keeps all four populated.
-    const dirEnergy = [0, 0, 0, 0];
 
     for (let by = 0; by < rows; by++) {
       for (let bx = 0; bx < cols; bx++) {
@@ -127,10 +154,6 @@
             const gx = luma[c + 1] - luma[c - 1];
             const gy = luma[down + x] - luma[up + x];
             gradSum += Math.sqrt(gx * gx + gy * gy) * 0.5;
-            dirEnergy[0] += gx * gx;
-            dirEnergy[1] += (gx * gx + 2 * gx * gy + gy * gy) * 0.5;
-            dirEnergy[2] += gy * gy;
-            dirEnergy[3] += (gx * gx - 2 * gx * gy + gy * gy) * 0.5;
             n++;
           }
         }
@@ -182,9 +205,28 @@
       else if (v <= 4) shadowCount++;
     }
     const pixelCount = luma.length || 1;
-    const dirMax = Math.max(dirEnergy[0], dirEnergy[1], dirEnergy[2], dirEnergy[3]);
-    const dirMin = Math.min(dirEnergy[0], dirEnergy[1], dirEnergy[2], dirEnergy[3]);
-    const directionalRatio = dirMax > 1e-9 ? dirMin / dirMax : 1;
+
+    // Directional collapse is measured on a high-pass copy, matching the desktop
+    // scorer: raw gradients are dominated by large tonal shifts (grass on a
+    // hillside) and hide the smear, which only shows up in the fine detail.
+    const blurred = boxBlur(luma, width, height, 2);
+    let dirE0 = 0, dirE1 = 0, dirE2 = 0, dirE3 = 0, dirN = 0;
+    for (let y = 1; y < height - 1; y++) {
+      const row = y * width;
+      for (let x = 1; x < width - 1; x++) {
+        const c = row + x;
+        const bx = (luma[c + 1] - blurred[c + 1]) - (luma[c - 1] - blurred[c - 1]);
+        const by = (luma[c + width] - blurred[c + width]) - (luma[c - width] - blurred[c - width]);
+        dirE0 += bx * bx;
+        dirE1 += (bx * bx + 2 * bx * by + by * by) * 0.5;
+        dirE2 += by * by;
+        dirE3 += (bx * bx - 2 * bx * by + by * by) * 0.5;
+        dirN++;
+      }
+    }
+    const dirMax = Math.max(dirE0, dirE1, dirE2, dirE3);
+    const dirMin = Math.min(dirE0, dirE1, dirE2, dirE3);
+    const directionalRatio = dirN > 0 && dirMax > 1e-9 ? dirMin / dirMax : 1;
 
     return {
       score: Math.max(globalVar, centerVar),
@@ -643,13 +685,14 @@
   }
 
   // 慢门拖影兜底：1/15s 配 420mm 时船体整体糊掉，但水面纹理仍撑高方差，
-  // 单看清晰度会误判成合焦。等效焦距 ≥150mm 且比 1/焦距 再慢 3 档时认定为风险。
+  // 单看清晰度会误判成合焦。等效焦距 ≥150mm 且比 1/焦距 再慢 1.5 档时算风险
+  // （1/80s 配 277mm 的手持长焦已经在 6520 上实测糊掉）。
   function slowShutter(exposureSec, focal35) {
     var seconds = Number(exposureSec);
     var focal = Number(focal35);
     if (!Number.isFinite(seconds) || !Number.isFinite(focal)) return false;
     if (seconds <= 0 || focal < 150) return false;
-    return seconds >= 8 / focal;
+    return seconds >= 2.83 / focal;
   }
 
   // 慢门只是“可能糊”：三脚架上的静止主体、单向线条都会骗人。只有快门慢、
@@ -657,7 +700,7 @@
   function motionSmear(directionalRatio, exposureSec, focal35) {
     var ratio = Number(directionalRatio);
     if (!Number.isFinite(ratio)) return false;
-    return ratio < 0.25 && slowShutter(exposureSec, focal35);
+    return ratio < 0.30 && slowShutter(exposureSec, focal35);
   }
 
   function verdictWithExif(norm, line, lowTexture, exposureSec, focal35, directionalRatio) {

@@ -25,6 +25,12 @@ FIELDS = (
     "AFAreaMode",
     "AFPointsUsed",
     "FocusLocation",
+    "AFAreaXPosition",
+    "AFAreaYPosition",
+    "AFAreaWidth",
+    "AFAreaHeight",
+    "AFImageWidth",
+    "AFImageHeight",
     "ImageWidth",
     "ImageHeight",
 )
@@ -69,25 +75,57 @@ def mode_label(value) -> str:
 
 
 def _normalize_box(meta: dict) -> list[float] | None:
-    """FocusLocation 形如 "x y w h"（传感器像素），转换成归一化框。"""
-    raw = meta.get("FocusLocation")
-    if not raw:
-        return None
-    parts = str(raw).replace(",", " ").split()
-    if len(parts) < 4:
-        return None
+    """把对焦区域转换成归一化框。
+
+    优先用 FocusLocation（"x y w h"，左下角+尺寸）；Nikon Z 机身只暴露
+    AFAreaXPosition / AFAreaYPosition（对焦框中心）与宽高，作为回退。
+    """
     try:
-        x, y, w, h = (float(item) for item in parts[:4])
         width = float(meta.get("ImageWidth") or 0)
         height = float(meta.get("ImageHeight") or 0)
     except (TypeError, ValueError):
         return None
     if width <= 0 or height <= 0:
         return None
-    cx = (x + w / 2.0) / width
-    cy = (y + h / 2.0) / height
-    hw = max(0.02, (w / width) / 2.0 * 1.35)
-    hh = max(0.02, (h / height) / 2.0 * 1.35)
+
+    cx = cy = hw = hh = 0.0
+    raw = meta.get("FocusLocation")
+    if raw:
+        parts = str(raw).replace(",", " ").split()
+        if len(parts) < 4:
+            return None
+        try:
+            x, y, w, h = (float(item) for item in parts[:4])
+        except (TypeError, ValueError):
+            return None
+        cx = (x + w / 2.0) / width
+        cy = (y + h / 2.0) / height
+        hw = max(0.02, (w / width) / 2.0 * 1.35)
+        hh = max(0.02, (h / height) / 2.0 * 1.35)
+    else:
+        try:
+            px = float(meta["AFAreaXPosition"])
+            py = float(meta["AFAreaYPosition"])
+            aw = float(meta.get("AFAreaWidth") or 0)
+            ah = float(meta.get("AFAreaHeight") or 0)
+        except (KeyError, TypeError, ValueError):
+            return None
+        if aw <= 0 or ah <= 0:
+            return None
+        af_width = float(meta.get("AFImageWidth") or 0) or width
+        af_height = float(meta.get("AFImageHeight") or 0) or height
+        area_ratio = (aw * ah) / (af_width * af_height)
+        cx = px / af_width
+        cy = py / af_height
+        # 单点 AF 只标位置，按客户端同样的规则扩成 30% 的主体区；
+        # 区域/宽区域 AF 本身已经框住主体，只扩 15%。
+        if area_ratio >= 0.008:
+            hw = max(0.02, (aw / width) / 2.0 * 1.15)
+            hh = max(0.02, (ah / height) / 2.0 * 1.15)
+        else:
+            hw = max(0.15, (aw / width) / 2.0 * 1.5)
+            hh = max(0.15, (ah / height) / 2.0 * 1.5)
+
     if not (0.0 <= cx <= 1.0 and 0.0 <= cy <= 1.0):
         return None
     return [
@@ -103,6 +141,17 @@ def read(paths: list[str], timeout: float = 90.0) -> dict[str, dict]:
     binary = which()
     if not binary or not paths:
         return {}
+    out: dict[str, dict] = {}
+    # Windows caps a command line at ~32k characters; a whole 400+ image folder
+    # in one call would silently drop EXIF, so read in small batches.
+    chunk_size = 50
+    for start in range(0, len(paths), chunk_size):
+        chunk = paths[start:start + chunk_size]
+        _read_chunk(binary, chunk, timeout, out)
+    return out
+
+
+def _read_chunk(binary: str, paths: list[str], timeout: float, out: dict[str, dict]) -> None:
     command = [binary, "-j", "-n", "-fast", "-q", "-q"]
     command += [f"-{name}" for name in FIELDS]
     command += [str(Path(path)) for path in paths]
@@ -114,15 +163,14 @@ def read(paths: list[str], timeout: float = 90.0) -> dict[str, dict]:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return {}
+        return
     if completed.returncode not in (0, 1):
-        return {}
+        return
     try:
         rows = json.loads(completed.stdout.decode("utf-8", errors="replace") or "[]")
     except ValueError:
-        return {}
+        return
 
-    out: dict[str, dict] = {}
     wanted = [str(Path(path)) for path in paths]
     # ExifTool on Windows prints SourceFile in the console code page, so Chinese
     # paths come back mojibake and cannot be matched by string. -json keeps one
@@ -138,7 +186,6 @@ def read(paths: list[str], timeout: float = 90.0) -> dict[str, dict]:
         entry["af_kind"] = mode_label(row.get("AFAreaMode"))
         out[str(Path(source).resolve()).lower()] = entry
         out[str(Path(source)).lower()] = entry
-    return out
 
 
 def lookup(meta: dict[str, dict], path: str) -> dict:

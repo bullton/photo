@@ -22,7 +22,7 @@ VERDICT_SHARP = 50.0
 VERDICT_BORDER = 30.0
 
 # 评分逻辑变更时递增，让 SQLite 里的旧结果失效重算（不改标签也要重算分数）。
-SCORE_VERSION = 4
+SCORE_VERSION = 5
 
 LOW_DETAIL = 0.15  # 纹理占比低于此值时不下“虚焦”结论，只标待定
 
@@ -94,8 +94,8 @@ def motion_score(metrics: dict) -> float:
 
 
 SLOW_SHUTTER_MIN_FOCAL35 = 150.0  # 长焦以下不做慢门判断，避免误伤夜景人像
-SLOW_SHUTTER_STOPS = 3.0  # 比 1/等效焦距 再慢 3 档才算风险
-MOTION_SMEAR_RATIO = 0.25  # 四向梯度能量比低于此值 = 出现单方向拖影
+SLOW_SHUTTER_STOPS = 1.5  # 比 1/等效焦距 再慢 1.5 档就算风险（277mm 用 1/80s 实测已糊）
+MOTION_SMEAR_RATIO = 0.30  # 四向梯度能量比低于此值 = 出现单方向拖影
 
 
 def slow_shutter(exposure_sec: float | None, focal35: float | None) -> bool:

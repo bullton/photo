@@ -2839,11 +2839,9 @@ select option { background: #14171a; color: var(--text); }
   function appendStatusChips(container, photo, verdict) {
     container.appendChild(verdictChip(verdict));
     if (photo.lowTexture) container.appendChild(el('span', 'chip chip-lowtex', '低纹理'));
-    if (photo.status === 'done' && photo.slowShutter) {
-      var slow = el('span', 'chip chip-slow' + (photo.motionSmear ? ' is-smear' : ''), photo.motionSmear ? '慢门拖影' : '慢门');
-      slow.title = photo.motionSmear
-        ? '曝光 ' + formatShutter(photo.shutter) + ' · ' + Math.round(photo.focal35) + 'mm，画面出现单方向拖影，已按临界处理'
-        : '曝光 ' + formatShutter(photo.shutter) + ' · ' + Math.round(photo.focal35) + 'mm；若为三脚架或静止主体可忽略';
+    if (photo.status === 'done' && photo.motionSmear) {
+      var slow = el('span', 'chip chip-slow is-smear', '慢门拖影');
+      slow.title = '曝光 ' + formatShutter(photo.shutter) + ' · ' + Math.round(photo.focal35) + 'mm，画面出现单方向拖影，已按临界处理';
       container.appendChild(slow);
     }
     if (photo.status === 'done' && photo.exposure !== 'normal') {
@@ -2865,10 +2863,8 @@ select option { background: #14171a; color: var(--text); }
     if (photo.status === 'error') return photo.name + '，无法读取';
     if (photo.status === 'pending' || !Number.isFinite(photo.norm)) return photo.name + '，正在分析';
     var text = photo.name + '，相对清晰度 ' + Math.round(photo.norm) + '，' + VERDICT_LABEL[verdict];
-    if (photo.slowShutter) {
-      text += photo.motionSmear
-        ? '，慢门拖影 ' + formatShutter(photo.shutter) + ' ' + Math.round(photo.focal35) + 'mm'
-        : '，慢门 ' + formatShutter(photo.shutter) + ' ' + Math.round(photo.focal35) + 'mm（未见拖影）';
+    if (photo.motionSmear) {
+      text += '，慢门拖影 ' + formatShutter(photo.shutter) + ' ' + Math.round(photo.focal35) + 'mm';
     }
     if (photo.rating) text += '，' + photo.rating + ' 星';
     if (photo.lowTexture) text += '，低纹理';
