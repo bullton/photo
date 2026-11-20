@@ -167,7 +167,7 @@
     bits.push('纹理覆盖 ' + Math.round((ai.textureRatio || 0) * 100) + '%');
     if (ai.reasonsText && ai.reasonsText.length) bits.push('判废原因：' + ai.reasonsText.join('、'));
     if (ai.groupBest) bits.push('组内最佳');
-    if (ai.groupDup) bits.push('组内重复（已降为 1 星）');
+    if (ai.groupDup) bits.push(ai.verdict === 'sharp' ? '组内重复（保留星级）' : '组内重复（已降为 1 星）');
     if (ai.exif && ai.exif.ISO) bits.push('ISO ' + Math.round(ai.exif.ISO));
     if (ai.cached) bits.push('来自本机缓存');
     note.textContent = bits.join(' · ');
@@ -277,8 +277,12 @@
       if (!photo.ai || photo.starTouched) return;
       var star = photo.ai.star || 0;
       if (star > 0 && bestOfGroup[photo.id]) star = Math.min(5, star + 1);
-      // 组内重复：即使单张本身够清晰，也只保留 1 星，交由用户在 DxO 里复核。
-      if (photo.ai.groupDup) star = Math.min(star, 1);
+      // 组内重复只影响“要不要留两张”的判断，不代表技术不合格：
+      // 本身合焦的帧保留技术星级，只打 AI/Duplicate 标记；确实糊的才压到 1 星。
+      if (photo.ai.groupDup) {
+        var sharpDup = photo.ai.verdict === 'sharp' && (photo.ai.star || 0) >= 3;
+        if (!sharpDup) star = Math.min(star, 1);
+      }
       if (star === 0) rejected += 1;
       if (photo.rating !== star) changed += 1;
       photo.rating = star;
