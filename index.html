@@ -3665,12 +3665,19 @@ select option { background: #14171a; color: var(--text); }
     return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
   }
 
+  function csvReasons(photo) {
+    var text = (photo.ai && photo.ai.reasonsText) || [];
+    if (!text.length && photo.motionSmear) text = ['慢门拖影'];
+    if (!text.length && photo.status === 'done' && photo.norm < 15) text = ['虚焦'];
+    return text.join('、');
+  }
+
   async function exportCsv() {
     if (state.running) {
       toast('分析完成后才能导出清单');
       return;
     }
-    var rows = [['文件名', '相对清晰度', '拉普拉斯方差', '判定', '低纹理', '分组', '组内排名', '星级(0-5)', '曝光', '高光溢出%', '暗部堆积%', '平均亮度', '宽度', '高度', '文件大小(字节)']];
+    var rows = [['文件名', '相对清晰度', '拉普拉斯方差', '判定', '判废原因', '低纹理', '分组', '组内排名', '星级(0-5)', '曝光', '高光溢出%', '暗部堆积%', '平均亮度', '宽度', '高度', '文件大小(字节)']];
     var ordered = state.photos.filter(function (photo) {
       return photo.status === 'done' || photo.status === 'error';
     }).sort(function (a, b) {
@@ -3688,6 +3695,7 @@ select option { background: #14171a; color: var(--text); }
         isDone ? Math.round(photo.norm) : '',
         isDone ? Number(photo.raw.toFixed(1)) : '',
         isDone ? VERDICT_LABEL[verdictOf(photo)] : '无法读取',
+        isDone ? csvReasons(photo) : '',
         isDone && photo.lowTexture ? '是' : '否',
         grouped ? photo.group + 1 : '',
         grouped ? photo.groupRank + 1 : '',
@@ -3904,6 +3912,19 @@ select option { background: #14171a; color: var(--text); }
       (duplicates ? '，标记重复 ' + duplicates + ' 张' : ''));
   }
 
+  // Lightroom 只有五个颜色标签，按“为什么判废”固定映射，方便在编辑器里按原因筛：
+  // 红=虚焦、蓝=慢门拖影、紫=黑帧/曝光失败、黄=组内重复、绿=保留。
+  function aiLabel(photo) {
+    var rating = photo.rating || 0;
+    var reasons = (photo.ai && photo.ai.reasons) || [];
+    if (photo.ai && photo.ai.groupDup) return 'Yellow';
+    if (reasons.indexOf('smear') >= 0) return 'Blue';
+    if (reasons.indexOf('misfire') >= 0 || reasons.indexOf('exposure') >= 0) return 'Purple';
+    if (rating === 0) return 'Red';
+    if (rating >= 4) return 'Green';
+    return null;
+  }
+
   async function exportAiXmp() {
     if (!window.AIEnhance) return;
     var targets = state.photos.filter(function (photo) {
@@ -3930,8 +3951,7 @@ select option { background: #14171a; color: var(--text); }
         name: photo.name,
         rating: rating,
         tags: tags,
-        label: photo.ai.groupDup ? 'Yellow'
-          : (rating === 0 ? 'Red' : (rating >= 4 ? 'Green' : null))
+        label: aiLabel(photo)
       };
     });
     els.aiXmpBtn.disabled = true;

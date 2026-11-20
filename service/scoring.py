@@ -22,7 +22,7 @@ VERDICT_SHARP = 50.0
 VERDICT_BORDER = 30.0
 
 # 评分逻辑变更时递增，让 SQLite 里的旧结果失效重算（不改标签也要重算分数）。
-SCORE_VERSION = 6
+SCORE_VERSION = 7
 
 LOW_DETAIL = 0.15  # 纹理占比低于此值时不下“虚焦”结论，只标待定
 
@@ -166,6 +166,21 @@ NIGHT_CLASSES = {"astrophotography", "night_scene"}
 NIGHT_STAR_MIN = 2
 HARD_BLUR_FOCUS = 15.0  # 低于此分没有任何可辨细节，连夜景/低纹理保护也不救
 
+# 技术性废片的硬规则。阈值取“几乎不可能误伤正常照片”的保守值：
+# 宁可漏掉几张，也不要把能用的片子判死。
+MISFIRE_MEAN = 8.0        # 平均亮度接近 0：镜头盖、误按快门
+MISFIRE_TEXTURE = 0.05    # 且整幅没有纹理
+BLOWN_MEAN = 225.0        # 平均亮度接近纯白
+BLOWN_CLIP = 0.65         # 且 65% 以上像素过曝：细节不可恢复
+
+REASON_TEXT = {
+    "blur": "虚焦",
+    "smear": "慢门拖影",
+    "misfire": "黑帧/无细节",
+    "exposure": "曝光失败",
+    "low_detail": "低细节",
+}
+
 
 def looks_like_night(metrics: dict) -> bool:
     """暗场照片的保底判断：不依赖 CLIP 也能识别大面积暗部 + 极低高光。"""
@@ -195,6 +210,12 @@ def score_photo(
         "noise": noise_score(metrics.get("noise", {}), iso),
         "subject": subject_score(metrics.get("subject", {})),
     }
+    exposure = metrics.get("exposure", {})
+    texture = float(metrics.get("texture_ratio", 0.0))
+    mean = float(exposure.get("mean", 128.0))
+    highlight = float(exposure.get("highlight_clip", 0.0))
+    misfire = mean < MISFIRE_MEAN and texture < MISFIRE_TEXTURE
+    blown = mean >= BLOWN_MEAN and highlight >= BLOWN_CLIP
     shutter_risk = slow_shutter(exposure_sec, focal35)
     smear = motion_smear(metrics, exposure_sec, focal35)
     if smear:
@@ -202,15 +223,27 @@ def score_photo(
         # 否则会出现"临界 2 星但 90 分"的自相矛盾。
         parts["focus"] = round(parts["focus"] * 0.5, 2)
     composite = sum(parts[key] * weight_map[key] for key in weight_map)
-    # 慢门 + 单方向拖影、或整幅几乎没有细节（分��� < 15），都算"明显不合焦"，
-    # 直接判废片；这类结论不再被夜景/低纹理保护翻案。
-    dead = smear or parts["focus"] < HARD_BLUR_FOCUS
-    verdict = verdict_of(parts["focus"], float(metrics.get("texture_ratio", 0.0)))
+    # 误拍、严重过曝、慢门拖影、整幅无细节，都直接判废片；
+    # 这些结论不再被夜景/低纹理保护翻案。
+    hard_blur = parts["focus"] < HARD_BLUR_FOCUS
+    dead = misfire or blown or smear or hard_blur
+    reasons: list[str] = []
+    if misfire:
+        reasons.append("misfire")
+    if blown:
+        reasons.append("exposure")
+    if smear:
+        reasons.append("smear")
+    if hard_blur and not (misfire or blown or smear):
+        reasons.append("blur")
+    verdict = verdict_of(parts["focus"], texture)
     if dead:
         verdict = "blur"
     star = star_for(composite, verdict)
     if dead:
         star = 0
+    elif verdict == "border" and texture < LOW_DETAIL:
+        reasons.append("low_detail")
     scene_keys = set(scenes or ())
     night = bool(scene_keys & NIGHT_CLASSES) or looks_like_night(metrics)
     if night and not dead:
@@ -227,4 +260,6 @@ def score_photo(
         "night": night,
         "slow_shutter": shutter_risk,
         "motion_smear": smear,
+        "reasons": reasons,
+        "reasons_text": [REASON_TEXT.get(item, item) for item in reasons],
     }

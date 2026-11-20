@@ -141,6 +141,47 @@ class ScoringTest(unittest.TestCase):
         self.assertAlmostEqual(scored["parts"]["focus"], 45.0, delta=1.0)
         self.assertLess(scored["composite"], 80.0)
 
+    def test_misfire_black_frame_is_rejected_even_at_night(self):
+        # DSC_8329 那类误拍/镜头盖：亮度接近 0、没有纹理；曾经被夜景保护救成 2 星。
+        metrics = {
+            "focus_norm": 0.30,
+            "texture_ratio": 0.012,
+            "exposure": {"mean": 1.0, "highlight_clip": 0.0, "shadow_clip": 0.95},
+            "noise": {"sigma": 0.5},
+            "subject": {"share": 1.0},
+        }
+        scored = scoring.score_photo(metrics)
+        self.assertTrue(scored["night"])
+        self.assertEqual(scored["verdict"], "blur")
+        self.assertEqual(scored["star"], 0)
+        self.assertEqual(scored["reasons"], ["misfire"])
+
+    def test_blank_white_frame_is_exposure_failure(self):
+        metrics = {
+            "focus_norm": 0.9,
+            "texture_ratio": 0.5,
+            "exposure": {"mean": 245.0, "highlight_clip": 0.92, "shadow_clip": 0.0},
+            "noise": {"sigma": 1.0},
+            "subject": {"share": 0.8},
+        }
+        scored = scoring.score_photo(metrics)
+        self.assertEqual(scored["verdict"], "blur")
+        self.assertEqual(scored["star"], 0)
+        self.assertEqual(scored["reasons"], ["exposure"])
+
+    def test_low_detail_border_is_labelled(self):
+        metrics = {
+            "focus_norm": 0.85,
+            "texture_ratio": 0.08,
+            "exposure": {"mean": 160.0, "highlight_clip": 0.02, "shadow_clip": 0.0},
+            "noise": {"sigma": 1.0},
+            "subject": {"share": 0.4},
+        }
+        scored = scoring.score_photo(metrics)
+        self.assertEqual(scored["verdict"], "border")
+        self.assertIn("low_detail", scored["reasons"])
+        self.assertIn("低细节", scored["reasons_text"])
+
     def test_slow_shutter_caps_sharp_verdict(self):
         # 5527 那类画面：水面高频纹理把 focus 撑到 90，实际是 1/15s @420mm 拖影。
         metrics = {
